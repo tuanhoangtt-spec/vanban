@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   KeyRound,
   Plus,
@@ -10,6 +10,8 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
+  Download,
+  Upload,
 } from "lucide-react";
 import type { ApiKeyEntry } from "@/types";
 import { loadKeys, saveKeys, addKey, removeKey, isExhausted } from "@/utils/apiKeyPool";
@@ -45,6 +47,7 @@ export function ApiKeyManager({
 }) {
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState(keys.length <= 1);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const availableCount = keys.filter((k) => !isExhausted(k)).length;
 
@@ -52,6 +55,31 @@ export function ApiKeyManager({
     if (!draft.trim()) return;
     onChange(addKey(keys, draft));
     setDraft("");
+  };
+
+  const handleExport = () => {
+    const blob = new Blob([JSON.stringify(keys, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = window.document.createElement("a");
+    a.href = url;
+    a.download = "gemini-api-keys.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportFile = async (file: File) => {
+    try {
+      const text = await file.text();
+      const parsed: ApiKeyEntry[] = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error("invalid");
+      let merged = keys;
+      for (const entry of parsed) {
+        if (entry?.key) merged = addKey(merged, entry.key, entry.label);
+      }
+      onChange(merged);
+    } catch {
+      alert("File không hợp lệ. Vui lòng chọn đúng file JSON đã xuất từ ứng dụng này.");
+    }
   };
 
   return (
@@ -152,7 +180,14 @@ export function ApiKeyManager({
 
       <p className="text-xs text-ink/50 leading-relaxed">
         Có thể thêm nhiều API Key — khi một key hết hạn mức (quota) trong ngày, hệ thống sẽ tự
-        động chuyển sang key tiếp theo còn khả dụng. Key chỉ lưu cục bộ trong trình duyệt này.{" "}
+        động chuyển sang key tiếp theo còn khả dụng. Key chỉ lưu cục bộ trong trình duyệt này —{" "}
+        <strong className="font-semibold text-ink/60">
+          nếu bạn test trên các URL preview khác nhau (ví dụ mỗi lần deploy Vercel tạo một domain
+          preview mới) hoặc dùng chế độ ẩn danh, trình duyệt sẽ coi đó là nơi lưu trữ khác nhau và
+          key sẽ không tự chuyển theo
+        </strong>{" "}
+        — hãy luôn truy cập cùng một domain (domain production), hoặc dùng nút Xuất/Nhập bên dưới
+        để sao lưu và khôi phục nhanh danh sách key.{" "}
         <a
           href="https://aistudio.google.com/app/apikey"
           target="_blank"
@@ -162,6 +197,34 @@ export function ApiKeyManager({
           Lấy key miễn phí tại Google AI Studio <ExternalLink className="h-3 w-3" />
         </a>
       </p>
+
+      {keys.length > 0 && (
+        <div className="flex gap-3 mt-2.5 pt-2.5 border-t border-ink/10">
+          <button
+            onClick={handleExport}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-ink/50 hover:text-ink transition"
+          >
+            <Download className="h-3.5 w-3.5" /> Xuất danh sách key (.json)
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-ink/50 hover:text-ink transition"
+          >
+            <Upload className="h-3.5 w-3.5" /> Nhập từ file
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleImportFile(file);
+              e.target.value = "";
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

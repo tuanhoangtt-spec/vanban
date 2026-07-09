@@ -9,10 +9,12 @@ import {
   Trash2,
   RefreshCcw,
   ImageIcon,
+  FileText,
 } from "lucide-react";
 import type { UploadedImage, ParsedDocument } from "@/types";
 import { BlockEditor } from "./BlockEditor";
 import { downloadDocx } from "@/utils/docxGenerator";
+import { downloadPdf } from "@/utils/pdfGenerator";
 
 export function DocumentCard({
   image,
@@ -28,15 +30,25 @@ export function DocumentCard({
   const [filename, setFilename] = useState(
     image.file.name.replace(/\.[^/.]+$/, "") || "van-ban"
   );
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState<"docx" | "pdf" | null>(null);
 
-  const handleDownload = async () => {
+  const handleDownloadDocx = async () => {
     if (!image.result) return;
-    setDownloading(true);
+    setDownloading("docx");
     try {
       await downloadDocx(image.result, filename);
     } finally {
-      setDownloading(false);
+      setDownloading(null);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!image.result) return;
+    setDownloading("pdf");
+    try {
+      await downloadPdf(image.result, filename);
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -126,16 +138,28 @@ export function DocumentCard({
                   placeholder="Tên file"
                 />
                 <button
-                  onClick={handleDownload}
-                  disabled={downloading}
+                  onClick={handleDownloadDocx}
+                  disabled={downloading !== null}
                   className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-ink text-white text-sm font-semibold px-4 py-2 hover:bg-ink/85 transition disabled:opacity-60"
                 >
-                  {downloading ? (
+                  {downloading === "docx" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Download className="h-4 w-4" />
                   )}
-                  Tải về Word (.docx)
+                  Word (.docx)
+                </button>
+                <button
+                  onClick={handleDownloadPdf}
+                  disabled={downloading !== null}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-ink/20 text-ink text-sm font-semibold px-4 py-2 hover:bg-ink/5 transition disabled:opacity-60"
+                >
+                  {downloading === "pdf" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4" />
+                  )}
+                  PDF
                 </button>
               </div>
             </>

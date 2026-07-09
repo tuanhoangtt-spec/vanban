@@ -1,9 +1,11 @@
-# Quét Văn Bản → Word
+# Quét Văn Bản → Word & PDF
 
 Ứng dụng web quét ảnh văn bản tiếng Việt (chữ in, chữ viết tay, biểu mẫu, bảng biểu)
-và tự động xuất ra file Word (`.docx`) chuẩn format văn phòng, dùng Google Gemini
-(`@google/genai`, model `gemini-2.5-flash`) để đọc ảnh và thư viện `docx` để dựng
-file Word ngay trên trình duyệt. Hỗ trợ lưu **nhiều API Key** và tự động xoay vòng
+và tự động xuất ra file **Word (`.docx`)** hoặc **PDF (`.pdf`)** chuẩn format văn
+phòng, dùng Google Gemini (`@google/genai`, model `gemini-2.5-flash`) để đọc ảnh,
+thư viện `docx` để dựng file Word và `jsPDF` + `jspdf-autotable` để dựng file PDF —
+cả hai đều chạy ngay trên trình duyệt, cùng đọc từ một dữ liệu JSON nên nội dung
+giữa hai định dạng luôn khớp nhau. Hỗ trợ lưu **nhiều API Key** và tự động xoay vòng
 sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
 
 > **Lưu ý về model:** `gemini-1.5-flash` đã bị Google ngừng hỗ trợ hoàn toàn trong
@@ -56,6 +58,11 @@ utils/
   geminiClient.ts               # Gọi Gemini API (thử lần lượt các key trong pool
                                 # khi gặp lỗi quota), validate & parse JSON, xử lý lỗi
   docxGenerator.ts                # Chuyển JSON → file .docx (docx npm package)
+  pdfGenerator.ts                  # Chuyển JSON → file .pdf (jsPDF + jspdf-autotable)
+  pdfFonts.ts                       # Tải & nhúng font Liberation Serif (tương thích
+                                    # Times New Roman, đủ dấu tiếng Việt) vào PDF
+public/fonts/
+  LiberationSerif-*.ttf                # Font nhúng cho PDF (Apache-2.0, xem mục 6)
 types/
   index.ts                          # Định nghĩa TypeScript cho các loại block
 ```
@@ -89,9 +96,9 @@ npm run start
    Vercel, không phát sinh chi phí server vì mọi lệnh gọi AI đều đi thẳng từ
    trình duyệt người dùng đến Google.
 
-## 6. Định dạng file Word đầu ra (cố định, không cần chỉnh)
+## 6. Định dạng file đầu ra (cố định, không cần chỉnh)
 
-Xem chi tiết trong `utils/docxGenerator.ts`:
+### Word (`.docx`) — `utils/docxGenerator.ts`
 
 - Khổ giấy A4 (11906 × 16838 dxa), lề trên/dưới/trái/phải đều 2cm (1134 dxa).
 - Font mặc định: **Times New Roman**, cỡ chữ **14pt** (size: 28 trong thư viện `docx`).
@@ -103,7 +110,47 @@ Xem chi tiết trong `utils/docxGenerator.ts`:
 - Khối chữ ký hai bên (`NGƯỜI MUA` / `NGƯỜI BÁN`...): dựng bằng bảng không viền để
   giữ hai/ba cột thẳng hàng.
 
-## 7. Nhiều API Key & tự động xoay vòng khi hết quota
+### PDF (`.pdf`) — `utils/pdfGenerator.ts`
+
+Dùng cùng dữ liệu JSON và cùng thông số layout (A4, lề 2cm, 14pt) như bản Word, dựng
+bằng `jsPDF` + `jspdf-autotable`:
+
+- Font nhúng trực tiếp vào file PDF là **Liberation Serif** — font mã nguồn mở
+  (Apache-2.0), có **cùng độ rộng ký tự với Times New Roman** (metric-compatible,
+  do Red Hat tạo ra làm bản thay thế miễn phí) và phủ đầy đủ dấu tiếng Việt. Không
+  dùng trực tiếp font "Times New Roman" thật vì đây là font thương mại của
+  Microsoft, không được phép đóng gói/phân phối lại trong ứng dụng. Về mặt hiển
+  thị, hai font gần như không khác biệt.
+- Bảng biểu dùng `jspdf-autotable`, tự phân trang khi bảng dài hơn 1 trang.
+- Dòng chấm điền thông tin được vẽ bằng nét đứt (dash pattern) canh từ cuối nhãn
+  đến trước giá trị, giá trị canh sát lề phải — cùng hiệu ứng như bản Word.
+- Đoạn văn dùng `align: "justify"` của jsPDF (căn đều hai bên cho các dòng trừ dòng
+  cuối) — với các đoạn cực ngắn (1 dòng), jsPDF sẽ hiển thị như căn trái vì không
+  có khoảng trống để giãn đều.
+
+## 7. Vì sao đôi khi AI đọc ảnh phức tạp bị lỗi "không tìm thấy JSON"?
+
+Model `gemini-2.5-flash` (và các model "thinking" nói chung) mặc định dành một phần
+ngân sách token để "suy nghĩ" (internal reasoning) trước khi viết câu trả lời, và
+số token suy nghĩ này **bị trừ chung vào cùng ngân sách `maxOutputTokens`** với nội
+dung trả lời thực sự. Với ảnh có rất nhiều chữ/bảng biểu dày đặc (như ảnh "Bảng kê
+thu mua hàng hóa"), model cần suy nghĩ nhiều hơn để giữ đúng cấu trúc bảng, có thể
+dùng hết ngân sách và trả về **phản hồi rỗng** (không phải lỗi mạng) — đây là lỗi đã
+biết của Gemini 2.5, không phải lỗi trong code gọi API.
+
+Cách khắc phục trong `utils/geminiClient.ts`:
+
+- Giới hạn ngân sách "suy nghĩ" (`thinkingConfig.thinkingBudget: 2048`) để nó không
+  ăn hết chỗ của phần trả lời thật.
+- Tăng `maxOutputTokens` lên 16384 để có đủ chỗ cho JSON dài (bảng nhiều hàng/cột).
+- Kiểm tra `finishReason` trả về: nếu là `MAX_TOKENS` với nội dung rỗng, báo lỗi rõ
+  ràng bằng tiếng Việt thay vì lỗi JSON chung chung, đồng thời gợi ý người dùng chụp
+  ảnh rõ hơn hoặc tách ảnh thành nhiều phần nhỏ nếu vẫn gặp lỗi.
+
+Nếu vẫn gặp lỗi này thường xuyên với ảnh rất dày đặc chữ, có thể tăng thêm
+`maxOutputTokens` (ví dụ 32768) trong `utils/geminiClient.ts`.
+
+## 8. Nhiều API Key & tự động xoay vòng khi hết quota
 
 Từ tháng 12/2025 Google đã giảm mạnh (50–80%) hạn mức miễn phí của Gemini API,
 nên việc hết quota trong ngày xảy ra khá thường xuyên nếu dùng nhiều. Vì vậy app
@@ -122,7 +169,27 @@ hỗ trợ lưu **nhiều API Key** (mỗi key có thể là một tài khoản 
 Toàn bộ logic này nằm trong `utils/apiKeyPool.ts` (quản lý danh sách + trạng thái)
 và `utils/geminiClient.ts` → hàm `scanImageWithKeyPool()` (vòng lặp thử từng key).
 
-## 8. Xử lý lỗi
+## 9. Lưu API Key giữa các lần truy cập — vì sao đôi khi phải nhập lại?
+
+Key được lưu vào `localStorage` của trình duyệt, gắn với **từng domain (origin)
+riêng biệt**. Nếu vẫn bị hỏi lại key mỗi lần, khả năng cao là do:
+
+- **Đang test qua các URL preview khác nhau của Vercel** — mỗi lần push code,
+  Vercel tạo một domain preview mới (`ten-project-abc123.vercel.app`), và trình
+  duyệt coi đó là nơi lưu trữ hoàn toàn khác với domain production. → Luôn dùng
+  domain production cố định (hoặc `localhost` khi dev local) để key được nhớ.
+- Đang mở bằng **cửa sổ ẩn danh / chế độ riêng tư** — dữ liệu bị xóa khi đóng cửa sổ.
+- Trình duyệt/tiện ích mở rộng có bật "Xóa dữ liệu duyệt web khi thoát" hoặc chặn
+  lưu trữ của bên thứ nhất.
+
+Vì kiến trúc app không có server lưu trữ (để giữ chi phí $0 và không ai ngoài bạn
+nhìn thấy key), nên không thể "nhớ" key xuyên domain bằng cách khác. Để đỡ phải gõ
+lại: dùng nút **Xuất danh sách key (.json)** trong khung API Key để tải một file
+sao lưu, rồi **Nhập từ file** ở môi trường mới — nhanh hơn nhiều so với dán lại
+từng key. File xuất ra chứa key ở dạng plain text nên cần giữ cẩn thận, không chia
+sẻ cho người khác.
+
+## 10. Xử lý lỗi
 
 `utils/geminiClient.ts` phân loại lỗi từ `ApiError` của SDK theo mã HTTP và hiển
 thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
@@ -130,17 +197,22 @@ thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
 - Chưa thêm API Key nào.
 - 400/401/403 — API Key sai, không có quyền, hoặc project chưa bật billing.
 - 404 — model không tồn tại/đã bị Google ngừng hỗ trợ.
-- 429 — hết hạn mức (quota) → tự động thử key kế tiếp trong pool (xem mục 7).
+- 429 — hết hạn mức (quota) → tự động thử key kế tiếp trong pool (xem mục 8).
 - 5xx — lỗi tạm thời phía Google, gợi ý thử lại sau.
 - Lỗi mạng thật sự (`Failed to fetch`) — gợi ý kiểm tra Internet/tường lửa/ad-blocker.
-- AI trả về JSON không hợp lệ / thiếu cấu trúc (tự retry bằng nút "Quét lại").
+- AI trả về JSON không hợp lệ / thiếu cấu trúc, hoặc rỗng do MAX_TOKENS (xem mục 7)
+  — tự retry bằng nút "Quét lại".
 
-## 9. Giới hạn hiện tại / hướng mở rộng
+## 11. Giới hạn hiện tại / hướng mở rộng
 
 - Gemini đôi khi vẫn đọc sai vài ký tự với chữ viết tay quá xấu — vì vậy có màn
-  hình xem trước & sửa nhẹ trước khi tải file Word.
-- Hiện xử lý từng ảnh ra một file Word riêng; có thể mở rộng thêm tính năng
-  "gộp nhiều ảnh vào 1 file Word" bằng cách nối mảng `blocks` của nhiều ảnh lại
-  trước khi gọi `buildDocx()`.
+  hình xem trước & sửa nhẹ trước khi tải file (áp dụng cho cả Word lẫn PDF, vì cả
+  hai đều dựng từ cùng dữ liệu đã chỉnh sửa).
+- Hiện xử lý từng ảnh ra một file riêng; có thể mở rộng thêm tính năng "gộp nhiều
+  ảnh vào 1 file" bằng cách nối mảng `blocks` của nhiều ảnh lại trước khi gọi
+  `buildDocx()` / `buildPdf()`.
+- Bản PDF dùng font Liberation Serif (thay cho Times New Roman thật vì lý do bản
+  quyền — xem mục 6) nên có thể lệch độ rộng dòng vài phần trăm so với Word ở các
+  đoạn văn rất dài; với văn bản hành chính thông thường thì không đáng kể.
 - Có thể thêm OCR fallback (Tesseract.js) cho trường hợp không có API Key, tuy
   chất lượng nhận diện chữ viết tay sẽ kém hơn nhiều so với Gemini.
