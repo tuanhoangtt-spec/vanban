@@ -77,4 +77,18 @@ export type UploadedImage = {
   status: ScanStatus;
   error?: string;
   result?: ParsedDocument;
+  usedKeyLabel?: string;
+};
+
+// One entry in the user's pool of Gemini API keys. Several keys let the app
+// automatically rotate to the next one once a key's daily free-tier quota
+// is exhausted, instead of forcing the user to paste in a new key by hand.
+export type ApiKeyEntry = {
+  id: string;
+  key: string;
+  label: string;
+  // Epoch ms until which this key is considered exhausted (quota hit).
+  // Cleared automatically once that time passes.
+  exhaustedUntil?: number;
+  lastUsedAt?: number;
 };

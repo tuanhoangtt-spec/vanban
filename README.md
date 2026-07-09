@@ -2,7 +2,16 @@
 
 Ứng dụng web quét ảnh văn bản tiếng Việt (chữ in, chữ viết tay, biểu mẫu, bảng biểu)
 và tự động xuất ra file Word (`.docx`) chuẩn format văn phòng, dùng Google Gemini
-để đọc ảnh và thư viện `docx` để dựng file Word ngay trên trình duyệt.
+(`@google/genai`, model `gemini-2.5-flash`) để đọc ảnh và thư viện `docx` để dựng
+file Word ngay trên trình duyệt. Hỗ trợ lưu **nhiều API Key** và tự động xoay vòng
+sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
+
+> **Lưu ý về model:** `gemini-1.5-flash` đã bị Google ngừng hỗ trợ hoàn toàn trong
+> năm 2026 (mọi request trả về lỗi 404). App này dùng `gemini-2.5-flash` qua SDK
+> `@google/genai` (SDK cũ `@google/generative-ai` đã bị Google khai tử). Model ID
+> được khai báo tại một chỗ duy nhất trong `utils/geminiClient.ts` (hằng số `MODEL`)
+> để dễ cập nhật khi Google đổi model trong tương lai — xem
+> https://ai.google.dev/gemini-api/docs/models để kiểm tra model mới nhất.
 
 ## 1. Kiến trúc & cách hoạt động
 
@@ -35,13 +44,17 @@ app/
   globals.css          # Tailwind + style phụ trợ
   page.tsx              # Trang chính: quản lý state ảnh, API key, điều phối UI
 components/
-  ApiKeyBar.tsx          # Ô nhập + lưu Gemini API Key vào localStorage
+  ApiKeyManager.tsx     # Quản lý NHIỀU Gemini API Key: thêm/xóa, hiển thị trạng thái
+                        # sẵn sàng / hết quota hôm nay, lưu vào localStorage
   UploadZone.tsx          # Kéo thả / chọn ảnh (react-dropzone)
   DocumentCard.tsx         # Thẻ hiển thị 1 ảnh: trạng thái, nút quét, tải Word
   BlockEditor.tsx           # Xem trước & chỉnh sửa nội dung AI đọc được
 utils/
+  apiKeyPool.ts               # Lưu trữ + logic xoay vòng key (đánh dấu hết quota,
+                              # tự reset lúc 0h hôm sau, ưu tiên key ít dùng nhất)
   geminiPrompt.ts             # System instruction + schema JSON gửi cho Gemini
-  geminiClient.ts               # Gọi Gemini API, validate & parse JSON, xử lý lỗi
+  geminiClient.ts               # Gọi Gemini API (thử lần lượt các key trong pool
+                                # khi gặp lỗi quota), validate & parse JSON, xử lý lỗi
   docxGenerator.ts                # Chuyển JSON → file .docx (docx npm package)
 types/
   index.ts                          # Định nghĩa TypeScript cho các loại block
@@ -90,18 +103,39 @@ Xem chi tiết trong `utils/docxGenerator.ts`:
 - Khối chữ ký hai bên (`NGƯỜI MUA` / `NGƯỜI BÁN`...): dựng bằng bảng không viền để
   giữ hai/ba cột thẳng hàng.
 
-## 7. Xử lý lỗi
+## 7. Nhiều API Key & tự động xoay vòng khi hết quota
 
-`utils/geminiClient.ts` phân loại lỗi rõ ràng và hiển thị thông báo tiếng Việt
-tương ứng ngay trên từng thẻ ảnh:
+Từ tháng 12/2025 Google đã giảm mạnh (50–80%) hạn mức miễn phí của Gemini API,
+nên việc hết quota trong ngày xảy ra khá thường xuyên nếu dùng nhiều. Vì vậy app
+hỗ trợ lưu **nhiều API Key** (mỗi key có thể là một tài khoản Google khác nhau):
 
-- Chưa nhập API Key.
-- API Key sai / bị thu hồi.
-- Vượt hạn mức (quota) Gemini API.
-- Lỗi mạng khi gọi API.
+1. Dán từng key vào ô ở đầu trang rồi bấm **Thêm** — có thể thêm bao nhiêu key tùy ý.
+2. Khi quét, app luôn thử **key ít được dùng gần đây nhất trong số các key còn quota**.
+3. Nếu Gemini trả lỗi 429 (hết quota) cho key đang dùng, app tự động đánh dấu key đó
+   "hết quota hôm nay" và **thử ngay key tiếp theo** trong danh sách — người dùng
+   không cần thao tác gì thêm.
+4. Cờ "hết quota" tự động được xóa sau 0h00 giờ địa phương của ngày hôm sau (ước tính
+   hợp lý cho hạn mức reset theo ngày của Gemini free tier).
+5. Nếu **tất cả** key trong danh sách đều hết quota, app báo lỗi rõ ràng thay vì
+   quét âm thầm thất bại.
+
+Toàn bộ logic này nằm trong `utils/apiKeyPool.ts` (quản lý danh sách + trạng thái)
+và `utils/geminiClient.ts` → hàm `scanImageWithKeyPool()` (vòng lặp thử từng key).
+
+## 8. Xử lý lỗi
+
+`utils/geminiClient.ts` phân loại lỗi từ `ApiError` của SDK theo mã HTTP và hiển
+thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
+
+- Chưa thêm API Key nào.
+- 400/401/403 — API Key sai, không có quyền, hoặc project chưa bật billing.
+- 404 — model không tồn tại/đã bị Google ngừng hỗ trợ.
+- 429 — hết hạn mức (quota) → tự động thử key kế tiếp trong pool (xem mục 7).
+- 5xx — lỗi tạm thời phía Google, gợi ý thử lại sau.
+- Lỗi mạng thật sự (`Failed to fetch`) — gợi ý kiểm tra Internet/tường lửa/ad-blocker.
 - AI trả về JSON không hợp lệ / thiếu cấu trúc (tự retry bằng nút "Quét lại").
 
-## 8. Giới hạn hiện tại / hướng mở rộng
+## 9. Giới hạn hiện tại / hướng mở rộng
 
 - Gemini đôi khi vẫn đọc sai vài ký tự với chữ viết tay quá xấu — vì vậy có màn
   hình xem trước & sửa nhẹ trước khi tải file Word.

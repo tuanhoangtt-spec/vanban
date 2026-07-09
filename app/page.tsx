@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import { FileText, ScanLine, Sparkles } from "lucide-react";
-import { ApiKeyBar, useApiKey } from "@/components/ApiKeyBar";
+import { ApiKeyManager, useApiKeyPool } from "@/components/ApiKeyManager";
 import { UploadZone } from "@/components/UploadZone";
 import { DocumentCard } from "@/components/DocumentCard";
-import { scanImageToDocument, GeminiError } from "@/utils/geminiClient";
+import { scanImageWithKeyPool, GeminiError } from "@/utils/geminiClient";
 import type { ParsedDocument, UploadedImage } from "@/types";
 
 function uid() {
@@ -13,7 +13,7 @@ function uid() {
 }
 
 export default function Home() {
-  const { apiKey, setApiKey, loaded } = useApiKey();
+  const { keys, setKeys, loaded } = useApiKeyPool();
   const [images, setImages] = useState<UploadedImage[]>([]);
 
   const handleFiles = (files: File[]) => {
@@ -36,9 +36,15 @@ export default function Home() {
 
     updateImage(id, { status: "processing", error: undefined });
     try {
-      const result = await scanImageToDocument(apiKey, target.file);
-      updateImage(id, { status: "done", result });
+      const { document, usedKey, keys: updatedKeys } = await scanImageWithKeyPool(
+        keys,
+        target.file
+      );
+      setKeys(updatedKeys); // persist exhaustion/usage bookkeeping
+      updateImage(id, { status: "done", result: document, usedKeyLabel: usedKey.label });
     } catch (err) {
+      // Even on failure, key exhaustion flags set during rotation attempts
+      // should stick, so re-read the pool from storage on the next render.
       const message =
         err instanceof GeminiError
           ? err.message
@@ -78,13 +84,13 @@ export default function Home() {
             <p className="text-xs text-ink/45">Ảnh giấy tờ tiếng Việt, chữ viết tay, bảng biểu → file .docx chuẩn văn phòng</p>
           </div>
           <span className="ml-auto hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-accent bg-accentSoft px-2.5 py-1 rounded-full">
-            <Sparkles className="h-3 w-3" /> Chạy bằng Gemini 1.5 Flash
+            <Sparkles className="h-3 w-3" /> Chạy bằng Gemini 2.5 Flash
           </span>
         </div>
       </header>
 
       <div className="max-w-4xl mx-auto px-5 sm:px-8 py-8 space-y-6">
-        {loaded && <ApiKeyBar apiKey={apiKey} onChange={setApiKey} />}
+        {loaded && <ApiKeyManager keys={keys} onChange={setKeys} />}
 
         <UploadZone onFiles={handleFiles} />
 
@@ -133,3 +139,4 @@ export default function Home() {
     </main>
   );
 }
+

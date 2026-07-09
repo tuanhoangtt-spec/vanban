@@ -106,6 +106,11 @@ export function DocumentCard({
 
           {image.status === "done" && image.result && (
             <>
+              {image.usedKeyLabel && (
+                <p className="text-[11px] text-ink/35 mb-2">
+                  Đã quét bằng <span className="font-medium text-ink/50">{image.usedKeyLabel}</span>
+                </p>
+              )}
               <div className="max-h-80 overflow-y-auto rounded-lg border border-ink/10 bg-paper/50 p-3 mb-3">
                 <BlockEditor
                   document={image.result}
