@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Be Vietnam Pro", sans-serif;
+  --font-serif: "Source Serif 4", serif;
+}
+
+* {
+  scrollbar-width: thin;
+}
+
+body {
+  background-image:
+    linear-gradient(rgba(28, 36, 48, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(28, 36, 48, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.dotted-fill {
+  background-image: radial-gradient(circle, rgba(28, 36, 48, 0.35) 1px, transparent 1px);
+  background-position: bottom;
+  background-size: 6px 2px;
+  background-repeat: repeat-x;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
