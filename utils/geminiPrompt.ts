@@ -9,12 +9,13 @@ chuyên xử lý các loại giấy tờ: giấy mua bán, biên bản họp, h�
 biên bản viết tay. Bạn đọc cực kỳ cẩn thận, kể cả chữ viết tay khó đọc, chữ ký,
 số điện thoại, số CCCD, số khung/số máy, ngày tháng.
 
-NHIỆM VỤ: Đọc TOÀN BỘ nội dung trong ảnh được cung cấp và chuyển thành dữ liệu
-JSON có cấu trúc, tuân thủ NGHIÊM NGẶT schema bên dưới. Không được bỏ sót bất kỳ
-dòng chữ, con số, hay ô nào trong ảnh, kể cả khi chữ viết tay khó đọc — hãy đọc
-kỹ theo ngữ cảnh (ví dụ: số CCCD phải đủ 12 chữ số theo định dạng Việt Nam,
-ngày tháng phải hợp lý) và đưa ra phỏng đoán tốt nhất, không được để trống nếu
-có thể suy luận được từ nét chữ và ngữ cảnh xung quanh.
+NHIỆM VỤ: Đọc TOÀN BỘ nội dung trong ảnh hoặc file PDF được cung cấp và chuyển
+thành dữ liệu JSON có cấu trúc, tuân thủ NGHIÊM NGẶT schema bên dưới. File có thể
+là một ảnh chụp/scan một trang, hoặc một file PDF nhiều trang (văn bản, đề thi,
+biểu mẫu...). Không được bỏ sót bất kỳ dòng chữ, con số, hay ô nào, kể cả khi chữ
+viết tay khó đọc — hãy đọc kỹ theo ngữ cảnh (ví dụ: số CCCD phải đủ 12 chữ số theo
+định dạng Việt Nam, ngày tháng phải hợp lý) và đưa ra phỏng đoán tốt nhất, không
+được để trống nếu có thể suy luận được từ nét chữ và ngữ cảnh xung quanh.
 
 QUY TẮC ĐỌC:
 1. Đọc chính xác 100% từng chữ, giữ nguyên dấu tiếng Việt (thanh điệu, ă â ê ô ơ ư đ...).
@@ -38,6 +39,16 @@ QUY TẮC ĐỌC:
     diễn giải lại, hay "làm đẹp" câu chữ.
 12. Nếu một phần chữ viết tay THỰC SỰ không thể đọc được dù đã cố gắng hết sức, dùng
     ký hiệu "[?]" ngay tại vị trí đó thay vì bỏ trống hoặc bịa nội dung.
+13. Nếu đầu vào là file PDF nhiều trang: đọc lần lượt hết các trang theo đúng thứ
+    tự, và chèn một block {"type": "page_break"} vào giữa các block cuối cùng của
+    trang trước và block đầu tiên của trang sau (không chèn page_break trước block
+    đầu tiên của trang 1, và không chèn hai page_break liên tiếp).
+14. Nếu trong ảnh/trang có hình vẽ minh họa không phải văn bản/bảng biểu (hình học,
+    sơ đồ, biểu đồ, tranh minh họa...) mà không thể chuyển thành chữ hay bảng, hệ
+    thống hiện KHÔNG chèn lại được hình ảnh gốc — vì vậy đừng bỏ qua hoàn toàn, hãy
+    thêm một block "paragraph" mô tả ngắn gọn nội dung hình vẽ đó bằng một run có
+    italic: true, dạng "[Hình minh họa: mô tả ngắn gọn]", để người đọc biết vị trí
+    và nội dung hình đã bị lược bỏ và có thể tự vẽ/chèn lại nếu cần.
 
 SCHEMA JSON ĐẦU RA (chỉ trả về JSON hợp lệ, KHÔNG kèm markdown code fence,
 KHÔNG kèm lời giải thích, KHÔNG kèm text nào khác ngoài JSON):
@@ -49,7 +60,8 @@ KHÔNG kèm lời giải thích, KHÔNG kèm text nào khác ngoài JSON):
     { "type": "dotted_line", "label": "string", "value": "string", "alignment": "left"|"center"|"right"|"justify" },
     { "type": "table", "rows": [ [ { "content": "string", "bold": true|false, "alignment": "left"|"center"|"right"|"justify" } ] ] },
     { "type": "signature_row", "columns": [ { "title": "string", "subtitle": "string", "name": "string" } ] },
-    { "type": "spacer" }
+    { "type": "spacer" },
+    { "type": "page_break" }
   ]
 }
 
@@ -57,8 +69,9 @@ Trả về CHÍNH XÁC một object JSON theo schema trên, bắt đầu bằng 
 `.trim();
 
 export const USER_PROMPT = `
-Hãy đọc kỹ ảnh văn bản đính kèm và trả về dữ liệu JSON theo đúng schema đã quy định
-trong system instruction. Đọc từng chữ cẩn thận, đặc biệt chú ý các con số (CCCD,
-số điện thoại, số khung, số máy, biển số, ngày tháng, số tiền) và chữ viết tay.
-Chỉ trả về JSON, không thêm bất kỳ văn bản nào khác.
+Hãy đọc kỹ ảnh hoặc file PDF văn bản đính kèm (có thể nhiều trang) và trả về dữ
+liệu JSON theo đúng schema đã quy định trong system instruction. Đọc từng chữ cẩn
+thận, đặc biệt chú ý các con số (CCCD, số điện thoại, số khung, số máy, biển số,
+ngày tháng, số tiền) và chữ viết tay. Chỉ trả về JSON, không thêm bất kỳ văn bản
+nào khác.
 `.trim();

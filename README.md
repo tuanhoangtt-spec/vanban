@@ -1,12 +1,13 @@
 # Quét Văn Bản → Word & PDF
 
-Ứng dụng web quét ảnh văn bản tiếng Việt (chữ in, chữ viết tay, biểu mẫu, bảng biểu)
-và tự động xuất ra file **Word (`.docx`)** hoặc **PDF (`.pdf`)** chuẩn format văn
-phòng, dùng Google Gemini (`@google/genai`, model `gemini-2.5-flash`) để đọc ảnh,
-thư viện `docx` để dựng file Word và `jsPDF` + `jspdf-autotable` để dựng file PDF —
-cả hai đều chạy ngay trên trình duyệt, cùng đọc từ một dữ liệu JSON nên nội dung
-giữa hai định dạng luôn khớp nhau. Hỗ trợ lưu **nhiều API Key** và tự động xoay vòng
-sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
+Ứng dụng web quét ảnh **hoặc file PDF** văn bản tiếng Việt (chữ in, chữ viết tay,
+biểu mẫu, bảng biểu, kể cả PDF nhiều trang) và tự động xuất ra file **Word (`.docx`)**
+hoặc **PDF (`.pdf`)** chuẩn format văn phòng, dùng Google Gemini (`@google/genai`,
+model `gemini-2.5-flash`, hỗ trợ đọc PDF gốc — không cần chuyển PDF thành ảnh trước)
+để đọc nội dung, thư viện `docx` để dựng file Word và `jsPDF` + `jspdf-autotable`
+để dựng file PDF — cả hai đều chạy ngay trên trình duyệt, cùng đọc từ một dữ liệu
+JSON nên nội dung giữa hai định dạng luôn khớp nhau. Hỗ trợ lưu **nhiều API Key**
+và tự động xoay vòng sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
 
 > **Lưu ý về model:** `gemini-1.5-flash` đã bị Google ngừng hỗ trợ hoàn toàn trong
 > năm 2026 (mọi request trả về lỗi 404). App này dùng `gemini-2.5-flash` qua SDK
@@ -18,10 +19,10 @@ sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
 ## 1. Kiến trúc & cách hoạt động
 
 ```
-Ảnh (.jpg/.png/.webp)
+Ảnh (.jpg/.png/.webp) hoặc file PDF (nhiều trang)
    │  (kéo thả / chọn file — react-dropzone)
    ▼
-Trình duyệt → gọi trực tiếp Gemini API (gemini-1.5-flash)
+Trình duyệt → gọi trực tiếp Gemini API (gemini-2.5-flash, đọc PDF gốc tự nhiên)
    │  (dùng API Key của người dùng, KHÔNG qua server trung gian)
    ▼
 JSON có cấu trúc { blocks: [...] }   ← utils/geminiPrompt.ts quy định schema
@@ -29,12 +30,12 @@ JSON có cấu trúc { blocks: [...] }   ← utils/geminiPrompt.ts quy định s
    ▼
 Xem trước & chỉnh sửa nhẹ (components/BlockEditor.tsx)
    │
-   ▼
-utils/docxGenerator.ts (thư viện `docx`) → file .docx tải trực tiếp về máy
+   ├──▶ utils/docxGenerator.ts (thư viện `docx`)  → file .docx
+   └──▶ utils/pdfGenerator.ts (jsPDF + autotable)  → file .pdf
 ```
 
-Toàn bộ xử lý (gọi Gemini + dựng file Word) chạy **hoàn toàn ở phía client**.
-Không có API route, không có server lưu trữ ảnh hay dữ liệu — vì vậy app deploy
+Toàn bộ xử lý (gọi Gemini + dựng file Word/PDF) chạy **hoàn toàn ở phía client**.
+Không có API route, không có server lưu trữ ảnh/PDF hay dữ liệu — vì vậy app deploy
 được ở chế độ tĩnh/serverless trên Vercel với chi phí $0 (chỉ tốn chi phí gọi
 Gemini API theo tài khoản Google của người dùng).
 
@@ -48,8 +49,8 @@ app/
 components/
   ApiKeyManager.tsx     # Quản lý NHIỀU Gemini API Key: thêm/xóa, hiển thị trạng thái
                         # sẵn sàng / hết quota hôm nay, lưu vào localStorage
-  UploadZone.tsx          # Kéo thả / chọn ảnh (react-dropzone)
-  DocumentCard.tsx         # Thẻ hiển thị 1 ảnh: trạng thái, nút quét, tải Word
+  UploadZone.tsx          # Kéo thả / chọn ảnh hoặc file PDF (react-dropzone)
+  DocumentCard.tsx         # Thẻ hiển thị 1 file: trạng thái, nút quét, tải Word/PDF
   BlockEditor.tsx           # Xem trước & chỉnh sửa nội dung AI đọc được
 utils/
   apiKeyPool.ts               # Lưu trữ + logic xoay vòng key (đánh dấu hết quota,
@@ -128,7 +129,32 @@ bằng `jsPDF` + `jspdf-autotable`:
   cuối) — với các đoạn cực ngắn (1 dòng), jsPDF sẽ hiển thị như căn trái vì không
   có khoảng trống để giãn đều.
 
-## 7. Vì sao đôi khi AI đọc ảnh phức tạp bị lỗi "không tìm thấy JSON"?
+## 7. Quét file PDF đầu vào (nhiều trang)
+
+Ngoài ảnh, có thể kéo thả thẳng file `.pdf` vào ứng dụng (ví dụ đề thi, hợp đồng
+nhiều trang, hồ sơ scan). Gemini 2.5 Flash đọc PDF **trực tiếp** (native document
+understanding) — không cần code tự tách PDF thành từng ảnh trang trước khi gửi:
+
+- `utils/geminiClient.ts` gửi thẳng file PDF dạng base64 (`mimeType: "application/pdf"`)
+  trong cùng request như ảnh, model tự đọc hết các trang theo đúng thứ tự, kể cả
+  bảng biểu/chữ viết tay/hình vẽ trong PDF scan.
+- Giữa nội dung của 2 trang liền nhau, prompt yêu cầu AI tự chèn một block
+  `{"type": "page_break"}` — khi xuất ra Word/PDF, hệ thống sẽ ngắt trang đúng vị
+  trí đó (`utils/docxGenerator.ts` dùng `PageBreak` của thư viện `docx`,
+  `utils/pdfGenerator.ts` gọi `doc.addPage()`).
+- Các hình vẽ minh họa không phải văn bản/bảng (hình học, sơ đồ...) hiện **không**
+  được chèn lại dưới dạng ảnh trong file xuất ra (ứng dụng không có bước trích xuất
+  ảnh từ PDF) — thay vào đó AI được yêu cầu ghi chú lại bằng một đoạn in nghiêng
+  dạng `[Hình minh họa: mô tả ngắn gọn]` tại đúng vị trí, để không bị mất hoàn toàn
+  thông tin và người dùng biết chỗ cần tự vẽ/chèn lại nếu cần.
+- Giới hạn kích thước file: request gửi lên Gemini phải dưới khoảng 20MB (base64),
+  app tự chặn và báo lỗi rõ ràng nếu file vượt ~18MB trên đĩa — với file lớn hơn,
+  hãy nén PDF hoặc tách bớt trang trước khi tải lên.
+- PDF càng nhiều trang, JSON trả về càng dài — ngân sách token cho ảnh PDF được
+  tăng riêng (`maxOutputTokens: 32768`, `thinkingBudget: 4096`) so với ảnh đơn
+  (xem thêm mục 8 về giới hạn token).
+
+## 8. Vì sao đôi khi AI đọc ảnh phức tạp bị lỗi "không tìm thấy JSON"?
 
 Model `gemini-2.5-flash` (và các model "thinking" nói chung) mặc định dành một phần
 ngân sách token để "suy nghĩ" (internal reasoning) trước khi viết câu trả lời, và
@@ -150,7 +176,7 @@ Cách khắc phục trong `utils/geminiClient.ts`:
 Nếu vẫn gặp lỗi này thường xuyên với ảnh rất dày đặc chữ, có thể tăng thêm
 `maxOutputTokens` (ví dụ 32768) trong `utils/geminiClient.ts`.
 
-## 8. Nhiều API Key & tự động xoay vòng khi hết quota
+## 9. Nhiều API Key & tự động xoay vòng khi hết quota
 
 Từ tháng 12/2025 Google đã giảm mạnh (50–80%) hạn mức miễn phí của Gemini API,
 nên việc hết quota trong ngày xảy ra khá thường xuyên nếu dùng nhiều. Vì vậy app
@@ -169,7 +195,7 @@ hỗ trợ lưu **nhiều API Key** (mỗi key có thể là một tài khoản 
 Toàn bộ logic này nằm trong `utils/apiKeyPool.ts` (quản lý danh sách + trạng thái)
 và `utils/geminiClient.ts` → hàm `scanImageWithKeyPool()` (vòng lặp thử từng key).
 
-## 9. Lưu API Key giữa các lần truy cập — vì sao đôi khi phải nhập lại?
+## 10. Lưu API Key giữa các lần truy cập — vì sao đôi khi phải nhập lại?
 
 Key được lưu vào `localStorage` của trình duyệt, gắn với **từng domain (origin)
 riêng biệt**. Nếu vẫn bị hỏi lại key mỗi lần, khả năng cao là do:
@@ -189,7 +215,7 @@ sao lưu, rồi **Nhập từ file** ở môi trường mới — nhanh hơn nhi
 từng key. File xuất ra chứa key ở dạng plain text nên cần giữ cẩn thận, không chia
 sẻ cho người khác.
 
-## 10. Xử lý lỗi
+## 11. Xử lý lỗi
 
 `utils/geminiClient.ts` phân loại lỗi từ `ApiError` của SDK theo mã HTTP và hiển
 thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
@@ -197,13 +223,13 @@ thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
 - Chưa thêm API Key nào.
 - 400/401/403 — API Key sai, không có quyền, hoặc project chưa bật billing.
 - 404 — model không tồn tại/đã bị Google ngừng hỗ trợ.
-- 429 — hết hạn mức (quota) → tự động thử key kế tiếp trong pool (xem mục 8).
+- 429 — hết hạn mức (quota) → tự động thử key kế tiếp trong pool (xem mục 9).
 - 5xx — lỗi tạm thời phía Google, gợi ý thử lại sau.
 - Lỗi mạng thật sự (`Failed to fetch`) — gợi ý kiểm tra Internet/tường lửa/ad-blocker.
-- AI trả về JSON không hợp lệ / thiếu cấu trúc, hoặc rỗng do MAX_TOKENS (xem mục 7)
+- AI trả về JSON không hợp lệ / thiếu cấu trúc, hoặc rỗng do MAX_TOKENS (xem mục 8)
   — tự retry bằng nút "Quét lại".
 
-## 11. Giới hạn hiện tại / hướng mở rộng
+## 12. Giới hạn hiện tại / hướng mở rộng
 
 - Gemini đôi khi vẫn đọc sai vài ký tự với chữ viết tay quá xấu — vì vậy có màn
   hình xem trước & sửa nhẹ trước khi tải file (áp dụng cho cả Word lẫn PDF, vì cả

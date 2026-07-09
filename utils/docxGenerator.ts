@@ -11,6 +11,7 @@ import {
   WidthType,
   TabStopType,
   LeaderType,
+  PageBreak,
 } from "docx";
 import { saveAs } from "file-saver";
 import type {
@@ -247,6 +248,8 @@ function blockToDocxElement(block: DocumentBlock): Paragraph | Table {
       return table(block);
     case "signature_row":
       return signatureRow(block);
+    case "page_break":
+      return new Paragraph({ children: [new PageBreak()] });
     case "spacer":
       return new Paragraph({ text: "", spacing: { after: 160 } });
     default:

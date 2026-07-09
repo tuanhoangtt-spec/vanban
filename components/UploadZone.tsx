@@ -22,6 +22,7 @@ export function UploadZone({
       "image/jpeg": [".jpg", ".jpeg"],
       "image/png": [".png"],
       "image/webp": [".webp"],
+      "application/pdf": [".pdf"],
     },
     multiple: true,
   });
@@ -54,7 +55,7 @@ export function UploadZone({
         {isDragActive ? "Thả ảnh vào đây" : "Kéo thả ảnh văn bản vào đây"}
       </p>
       <p className="text-sm text-ink/50 mt-1">
-        hoặc bấm để chọn file — hỗ trợ .jpg, .png, .webp — có thể chọn nhiều ảnh cùng lúc
+        hoặc bấm để chọn file — hỗ trợ .jpg, .png, .webp, .pdf (nhiều trang) — có thể chọn nhiều file cùng lúc
       </p>
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import type { DocumentBlock, ParsedDocument, TableCell } from "@/types";
-import { Heading, Rows3, AlignJustify, MoreHorizontal, PenLine } from "lucide-react";
+import { Heading, Rows3, AlignJustify, MoreHorizontal, PenLine, FileStack } from "lucide-react";
 
 function AutoTextarea({
   value,
@@ -190,6 +190,17 @@ export function BlockEditor({
                     </div>
                   ))}
                 </div>
+              </div>
+            );
+
+          case "page_break":
+            return (
+              <div key={i} className="flex items-center gap-2 py-1 text-ink/30">
+                <div className="flex-1 border-t border-dashed border-ink/20" />
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide">
+                  <FileStack className="h-3 w-3" /> Ngắt trang
+                </span>
+                <div className="flex-1 border-t border-dashed border-ink/20" />
               </div>
             );
 

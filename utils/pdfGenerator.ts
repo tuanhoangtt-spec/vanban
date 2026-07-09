@@ -51,6 +51,11 @@ class PdfCursor {
   advance(mm: number) {
     this.y += mm;
   }
+
+  forcePageBreak() {
+    this.doc.addPage();
+    this.y = MARGIN_MM;
+  }
 }
 
 function drawWrappedText(
@@ -212,6 +217,8 @@ function drawBlock(doc: jsPDF, cursor: PdfCursor, block: DocumentBlock) {
       return drawTable(doc, cursor, block);
     case "signature_row":
       return drawSignatureRow(doc, cursor, block);
+    case "page_break":
+      return cursor.forcePageBreak();
     case "spacer":
       cursor.ensureSpace(BLOCK_GAP_MM);
       return cursor.advance(BLOCK_GAP_MM);

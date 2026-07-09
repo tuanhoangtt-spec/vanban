@@ -56,13 +56,20 @@ export type SpacerBlock = {
   type: "spacer";
 };
 
+// Marks a page boundary from a multi-page source (PDF). Renders as an
+// explicit page break in both the .docx and .pdf export.
+export type PageBreakBlock = {
+  type: "page_break";
+};
+
 export type DocumentBlock =
   | HeadingBlock
   | ParagraphBlock
   | DottedLineBlock
   | TableBlock
   | SignatureBlock
-  | SpacerBlock;
+  | SpacerBlock
+  | PageBreakBlock;
 
 export type ParsedDocument = {
   blocks: DocumentBlock[];
@@ -70,6 +77,8 @@ export type ParsedDocument = {
 
 export type ScanStatus = "idle" | "uploading" | "processing" | "done" | "error";
 
+// Despite the name, this now also holds uploaded PDF files (Gemini reads
+// PDFs natively, including multiple pages, embedded diagrams and tables).
 export type UploadedImage = {
   id: string;
   file: File;

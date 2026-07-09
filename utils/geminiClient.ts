@@ -57,6 +57,7 @@ function validateBlocks(blocks: unknown): DocumentBlock[] {
     "table",
     "signature_row",
     "spacer",
+    "page_break",
   ]);
   for (const b of blocks) {
     if (!b || typeof b !== "object" || !allowedTypes.has((b as any).type)) {
@@ -104,9 +105,23 @@ function classifyError(err: unknown): GeminiError {
   return new GeminiError("UNKNOWN", `Lỗi không xác định: ${message}`);
 }
 
+// Gemini's inline request payload has a hard ceiling (base64 inflates bytes
+// ~1.33x); staying comfortably under it avoids opaque failures for big scans
+// or many-page PDFs. Files above this should be split or use the Files API
+// (not implemented here to keep the app fully client-side / serverless).
+const MAX_FILE_SIZE_BYTES = 18 * 1024 * 1024; // ~18MB on disk
+
 async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    throw new GeminiError(
+      "UNKNOWN",
+      `File "${file.name}" quá lớn (${(file.size / 1024 / 1024).toFixed(1)}MB). Vui lòng dùng file dưới ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB, hoặc nén/giảm số trang PDF.`
+    );
+  }
+
   const ai = new GoogleGenAI({ apiKey });
   const base64 = await fileToBase64(file);
+  const isPdf = file.type === "application/pdf";
 
   let resultText: string;
   try {
@@ -132,8 +147,8 @@ async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
         // response with finishReason "MAX_TOKENS" — no error, just nothing.
         // Capping the thinking budget and raising maxOutputTokens generously
         // guarantees room is left for the actual JSON to be written out.
-        maxOutputTokens: 16384,
-        thinkingConfig: { thinkingBudget: 2048 },
+        maxOutputTokens: isPdf ? 32768 : 16384,
+        thinkingConfig: { thinkingBudget: isPdf ? 4096 : 2048 },
       },
     });
 

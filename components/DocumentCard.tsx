@@ -31,6 +31,7 @@ export function DocumentCard({
     image.file.name.replace(/\.[^/.]+$/, "") || "van-ban"
   );
   const [downloading, setDownloading] = useState<"docx" | "pdf" | null>(null);
+  const isPdf = image.file.type === "application/pdf";
 
   const handleDownloadDocx = async () => {
     if (!image.result) return;
@@ -55,13 +56,23 @@ export function DocumentCard({
   return (
     <div className="rounded-2xl border border-ink/10 bg-white shadow-card overflow-hidden">
       <div className="flex flex-col sm:flex-row">
-        {/* Left: original image preview */}
+        {/* Left: original file preview */}
         <div className="sm:w-56 shrink-0 bg-ink/5 relative">
-          <img
-            src={image.previewUrl}
-            alt={image.file.name}
-            className="w-full h-48 sm:h-full object-cover"
-          />
+          {isPdf ? (
+            <div className="w-full h-48 sm:h-full flex flex-col items-center justify-center gap-2 text-ink/40 p-4">
+              <FileText className="h-9 w-9" strokeWidth={1.5} />
+              <span className="text-xs text-center break-all line-clamp-3">{image.file.name}</span>
+              <span className="text-[10px] text-ink/30">
+                {(image.file.size / 1024 / 1024).toFixed(1)} MB
+              </span>
+            </div>
+          ) : (
+            <img
+              src={image.previewUrl}
+              alt={image.file.name}
+              className="w-full h-48 sm:h-full object-cover"
+            />
+          )}
           <div className="absolute top-2 left-2 inline-flex items-center gap-1 bg-black/55 text-white text-[10px] px-2 py-1 rounded-full backdrop-blur-sm">
             <ImageIcon className="h-3 w-3" />
             <span className="max-w-[8rem] truncate">{image.file.name}</span>
