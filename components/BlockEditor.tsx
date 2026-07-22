@@ -2,6 +2,18 @@
 
 import type { DocumentBlock, ParsedDocument, TableCell } from "@/types";
 import { Heading, Rows3, AlignJustify, MoreHorizontal, PenLine, FileStack } from "lucide-react";
+import { MathText } from "./MathText";
+
+const hasMath = (text: string) => /\$[^$]+\$/.test(text ?? "");
+
+function MathPreview({ text }: { text: string }) {
+  if (!hasMath(text)) return null;
+  return (
+    <div className="rounded-md bg-ink/[0.03] border border-ink/10 px-2 py-1.5 text-sm">
+      <MathText text={text} />
+    </div>
+  );
+}
 
 function AutoTextarea({
   value,
@@ -85,6 +97,7 @@ export function BlockEditor({
                   onChange={(v) => updateBlock(i, { ...block, content: v })}
                   className="font-serif font-bold text-center text-base"
                 />
+                <MathPreview text={block.content} />
               </div>
             );
 
@@ -100,6 +113,7 @@ export function BlockEditor({
                   }
                   className="text-sm leading-relaxed text-justify"
                 />
+                <MathPreview text={block.runs.map((r) => r.text).join("")} />
               </div>
             );
 
@@ -123,6 +137,7 @@ export function BlockEditor({
                     />
                   </div>
                 </div>
+                <MathPreview text={block.value ?? ""} />
               </div>
             );
 
@@ -146,6 +161,11 @@ export function BlockEditor({
                                 onChange={(v) => updateCell(i, r, c, v)}
                                 className={cell.bold ? "font-semibold text-xs" : "text-xs"}
                               />
+                              {hasMath(cell.content) && (
+                                <div className="text-xs mt-0.5">
+                                  <MathText text={cell.content} />
+                                </div>
+                              )}
                             </td>
                           ))}
                         </tr>

@@ -4,11 +4,36 @@
 export type BlockAlignment = "left" | "center" | "right" | "justify";
 
 export type TextRun = {
+  // Plain text. May contain inline math wrapped in single-dollar delimiters,
+  // e.g. "Đạo hàm của $y = x^{5}$ là". A tiny LaTeX-like subset is supported
+  // (^, _, \frac, \sqrt, \sin/\cos/..., \lim, \sum, \int, greek letters, etc.
+  // — see utils/mathParser.ts for the exact grammar). This keeps every block
+  // that already carries free text (paragraphs, headings, dotted lines, table
+  // cells) able to contain real, natively-rendered formulas in both the .docx
+  // and .pdf export, without changing the JSON shape Gemini has to produce.
   text: string;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
 };
+
+// ---- Inline math AST -------------------------------------------------
+// Produced by parsing the "$...$" spans inside any text field. Deliberately
+// small: it covers what actually shows up in Vietnamese math exams (đạo hàm,
+// giới hạn, tích phân...) rather than being a general LaTeX engine.
+export type MathNode =
+  | { t: "r"; v: string } // literal run: letters, digits, operators, unicode symbols
+  | { t: "group"; children: MathNode[] } // {...} grouping, no visual mark
+  | { t: "frac"; num: MathNode[]; den: MathNode[] }
+  | { t: "sup"; base: MathNode[]; sup: MathNode[] }
+  | { t: "sub"; base: MathNode[]; sub: MathNode[] }
+  | { t: "subsup"; base: MathNode[]; sub: MathNode[]; sup: MathNode[] }
+  | { t: "sqrt"; children: MathNode[] }
+  | { t: "nthroot"; degree: MathNode[]; children: MathNode[] }
+  | { t: "func"; name: string; children: MathNode[] } // sin, cos, tan, cot, ln, log, exp...
+  | { t: "lim"; sub: MathNode[]; children: MathNode[] } // lim_{x->a} f(x)
+  | { t: "sum"; sub: MathNode[]; sup: MathNode[]; children: MathNode[] }
+  | { t: "int"; sub: MathNode[]; sup: MathNode[]; children: MathNode[] };
 
 export type HeadingBlock = {
   type: "heading";

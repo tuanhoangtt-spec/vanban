@@ -7,7 +7,11 @@ import type {
   DocumentBlock,
   BlockAlignment,
   TableCell,
+  MathNode,
 } from "@/types";
+import { splitInlineMath, hasTallMath } from "./mathParser";
+import { measureMath, drawMath } from "./pdfMath";
+import { textWithMathToPlain } from "./mathPlainText";
 
 // Mirrors the fixed office formatting used in docxGenerator.ts, translated
 // to jsPDF's mm/pt units, so the PDF and the Word export read the same way.
@@ -58,54 +62,138 @@ class PdfCursor {
   }
 }
 
-function drawWrappedText(
+// ---- inline text + math layout ----------------------------------------
+// jsPDF has no OMML support, so paragraphs/headings that may contain "$...$"
+// formulas are laid out manually: text is tokenized into words/spaces/math
+// atoms, wrapped to CONTENT_WIDTH_MM, and drawn token by token so a formula
+// never gets cut mid-expression. Lines that contain a "tall" construct
+// (fraction, root, sub/superscript, sum, integral) get extra line height so
+// they don't collide with the line above/below.
+
+type InlineToken =
+  | { kind: "word"; text: string; bold?: boolean; italic?: boolean }
+  | { kind: "space"; bold?: boolean; italic?: boolean }
+  | { kind: "math"; nodes: MathNode[] };
+
+type InlineRun = { text: string; bold?: boolean; italic?: boolean };
+
+function tokenizeRuns(runs: InlineRun[]): InlineToken[] {
+  const out: InlineToken[] = [];
+  for (const run of runs) {
+    for (const seg of splitInlineMath(run.text ?? "")) {
+      if (seg.kind === "math") {
+        out.push({ kind: "math", nodes: seg.nodes });
+        continue;
+      }
+      const parts = seg.value.split(/(\s+)/).filter((p) => p.length > 0);
+      for (const p of parts) {
+        if (/^\s+$/.test(p)) out.push({ kind: "space", bold: run.bold, italic: run.italic });
+        else out.push({ kind: "word", text: p, bold: run.bold, italic: run.italic });
+      }
+    }
+  }
+  return out;
+}
+
+function tokenWidth(doc: jsPDF, token: InlineToken, sizePt: number): number {
+  if (token.kind === "math") return measureMath({ doc }, token.nodes, sizePt);
+  doc.setFont(PDF_FONT_FAMILY, token.bold ? "bold" : token.italic ? "italic" : "normal");
+  doc.setFontSize(sizePt);
+  return doc.getTextWidth(token.kind === "space" ? " " : token.text);
+}
+
+function tokenIsTall(token: InlineToken): boolean {
+  if (token.kind !== "math") return false;
+  const tall = new Set(["frac", "sqrt", "nthroot", "sup", "sub", "subsup", "sum", "int", "lim"]);
+  const walk = (nodes: MathNode[]): boolean =>
+    nodes.some((n) => tall.has(n.t) || (n.t === "func" && walk(n.children)) || (n.t === "group" && walk(n.children)));
+  return walk(token.nodes);
+}
+
+function wrapTokens(doc: jsPDF, tokens: InlineToken[], sizePt: number, maxWidthMm: number): InlineToken[][] {
+  const lines: InlineToken[][] = [];
+  let line: InlineToken[] = [];
+  let lineWidth = 0;
+
+  for (const token of tokens) {
+    const w = tokenWidth(doc, token, sizePt);
+    if (line.length > 0 && lineWidth + w > maxWidthMm) {
+      // trim a trailing space before pushing
+      if (line[line.length - 1]?.kind === "space") line.pop();
+      lines.push(line);
+      line = [];
+      lineWidth = 0;
+      if (token.kind === "space") continue; // don't start a new line with a space
+    }
+    line.push(token);
+    lineWidth += w;
+  }
+  if (line.length > 0) {
+    if (line[line.length - 1]?.kind === "space") line.pop();
+    lines.push(line);
+  }
+  return lines.length > 0 ? lines : [[]];
+}
+
+function drawInlineRuns(
   doc: jsPDF,
   cursor: PdfCursor,
-  text: string,
-  opts: { align: BlockAlignment; bold?: boolean; sizePt?: number }
+  runs: InlineRun[],
+  opts: { align: BlockAlignment; sizePt?: number }
 ) {
-  if (!text) {
-    cursor.ensureSpace(LINE_HEIGHT_MM);
-    cursor.advance(LINE_HEIGHT_MM);
-    return;
-  }
-  doc.setFont(PDF_FONT_FAMILY, opts.bold ? "bold" : "normal");
-  doc.setFontSize(opts.sizePt ?? FONT_SIZE_PT);
-
-  const lines = doc.splitTextToSize(text, CONTENT_WIDTH_MM) as string[];
+  const sizePt = opts.sizePt ?? FONT_SIZE_PT;
+  const tokens = tokenizeRuns(runs);
+  const lines = wrapTokens(doc, tokens, sizePt, CONTENT_WIDTH_MM);
   const align = jsAlign(opts.align);
 
-  lines.forEach((line, i) => {
-    cursor.ensureSpace(LINE_HEIGHT_MM);
-    const isLast = i === lines.length - 1;
-    if (align === "center") {
-      doc.text(line, MARGIN_MM + CONTENT_WIDTH_MM / 2, cursor.y, { align: "center" });
-    } else if (align === "right") {
-      doc.text(line, MARGIN_MM + CONTENT_WIDTH_MM, cursor.y, { align: "right" });
-    } else if (align === "justify" && !isLast) {
-      doc.text(line, MARGIN_MM, cursor.y, { maxWidth: CONTENT_WIDTH_MM, align: "justify" });
-    } else {
-      doc.text(line, MARGIN_MM, cursor.y);
+  lines.forEach((line, lineIdx) => {
+    const tall = line.some(tokenIsTall);
+    const lineHeight = tall ? LINE_HEIGHT_MM * 1.65 : LINE_HEIGHT_MM;
+    const topPad = tall ? LINE_HEIGHT_MM * 0.55 : 0;
+    cursor.ensureSpace(lineHeight + topPad);
+    cursor.advance(topPad);
+
+    const widths = line.map((t) => tokenWidth(doc, t, sizePt));
+    const contentWidth = widths.reduce((a, b) => a + b, 0);
+
+    let startX = MARGIN_MM;
+    let extraPerSpace = 0;
+    if (align === "center") startX = MARGIN_MM + (CONTENT_WIDTH_MM - contentWidth) / 2;
+    else if (align === "right") startX = MARGIN_MM + CONTENT_WIDTH_MM - contentWidth;
+    else if (align === "justify" && lineIdx < lines.length - 1) {
+      const spaceCount = line.filter((t) => t.kind === "space").length;
+      if (spaceCount > 0) extraPerSpace = Math.max(0, (CONTENT_WIDTH_MM - contentWidth) / spaceCount);
     }
-    cursor.advance(LINE_HEIGHT_MM);
+
+    let x = startX;
+    for (let i = 0; i < line.length; i++) {
+      const token = line[i];
+      if (token.kind === "math") {
+        x = drawMath({ doc }, x, cursor.y, token.nodes, sizePt);
+      } else if (token.kind === "word") {
+        doc.setFont(PDF_FONT_FAMILY, token.bold ? "bold" : token.italic ? "italic" : "normal");
+        doc.setFontSize(sizePt);
+        doc.text(token.text, x, cursor.y);
+        x += widths[i];
+      } else {
+        x += widths[i] + extraPerSpace;
+      }
+    }
+
+    cursor.advance(lineHeight);
   });
 }
 
 function drawHeading(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBlock, { type: "heading" }>) {
-  drawWrappedText(doc, cursor, block.content, {
+  drawInlineRuns(doc, cursor, [{ text: block.content, bold: block.bold ?? true }], {
     align: block.alignment ?? "center",
-    bold: block.bold ?? true,
     sizePt: block.level === 1 ? HEADING_SIZE_PT : FONT_SIZE_PT,
   });
   cursor.advance(BLOCK_GAP_MM);
 }
 
 function drawParagraph(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBlock, { type: "paragraph" }>) {
-  const text = block.runs.map((r) => r.text).join("");
-  drawWrappedText(doc, cursor, text, {
-    align: block.alignment ?? "justify",
-    bold: block.runs[0]?.bold,
-  });
+  drawInlineRuns(doc, cursor, block.runs, { align: block.alignment ?? "justify" });
   cursor.advance(BLOCK_GAP_MM * 0.6);
 }
 
@@ -113,8 +201,8 @@ function drawDottedLine(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBl
   cursor.ensureSpace(LINE_HEIGHT_MM);
   doc.setFontSize(FONT_SIZE_PT);
 
-  const label = `${(block.label ?? "").trim()}${(block.label ?? "").trim().endsWith(":") ? "" : ":"} `;
-  const value = (block.value ?? "").trim();
+  const label = `${textWithMathToPlain(block.label ?? "").trim()}${(block.label ?? "").trim().endsWith(":") ? "" : ":"} `;
+  const value = textWithMathToPlain(block.value ?? "").trim();
 
   doc.setFont(PDF_FONT_FAMILY, "normal");
   doc.text(label, MARGIN_MM, cursor.y);
@@ -142,7 +230,7 @@ function drawDottedLine(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBl
 
 function drawTable(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBlock, { type: "table" }>) {
   const rows = block.rows.length > 0 ? block.rows : [[{ content: "" } as TableCell]];
-  const body = rows.map((row) => row.map((cell) => cell.content ?? ""));
+  const body = rows.map((row) => row.map((cell) => textWithMathToPlain(cell.content ?? "")));
   const styleMap = new Map<string, { bold?: boolean; align?: BlockAlignment }>();
   rows.forEach((row, r) =>
     row.forEach((cell, c) => styleMap.set(`${r}-${c}`, { bold: cell.bold, align: cell.alignment }))
@@ -185,13 +273,13 @@ function drawSignatureRow(doc: jsPDF, cursor: PdfCursor, block: Extract<Document
 
     doc.setFont(PDF_FONT_FAMILY, "bold");
     doc.setFontSize(FONT_SIZE_PT);
-    doc.text(col.title, centerX, y, { align: "center" });
+    doc.text(textWithMathToPlain(col.title), centerX, y, { align: "center" });
     y += LINE_HEIGHT_MM;
 
     if (col.subtitle) {
       doc.setFont(PDF_FONT_FAMILY, "italic");
       doc.setFontSize(FONT_SIZE_PT - 2);
-      doc.text(col.subtitle, centerX, y, { align: "center" });
+      doc.text(textWithMathToPlain(col.subtitle), centerX, y, { align: "center" });
       y += LINE_HEIGHT_MM;
     }
 
@@ -199,7 +287,7 @@ function drawSignatureRow(doc: jsPDF, cursor: PdfCursor, block: Extract<Document
 
     doc.setFont(PDF_FONT_FAMILY, "bold");
     doc.setFontSize(FONT_SIZE_PT);
-    doc.text(col.name ?? "", centerX, y, { align: "center" });
+    doc.text(textWithMathToPlain(col.name ?? ""), centerX, y, { align: "center" });
   });
 
   cursor.advance(blockHeight);

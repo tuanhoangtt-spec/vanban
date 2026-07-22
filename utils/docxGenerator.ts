@@ -20,6 +20,31 @@ import type {
   BlockAlignment,
   TableCell,
 } from "@/types";
+import { splitInlineMath } from "./mathParser";
+import { buildInlineMath } from "./docxMath";
+
+// Turns free text that may contain "$...$" formulas into a mix of ordinary
+// DocxTextRun (for plain text, keeping the requested styling) and native
+// OMML Math elements (for the formulas) — used for every text-bearing block
+// so headings, paragraphs, dotted lines and table cells can all carry math.
+function textToDocxRuns(
+  text: string,
+  style: { bold?: boolean; italic?: boolean; underline?: boolean; size?: number } = {}
+): (DocxTextRun | ReturnType<typeof buildInlineMath>)[] {
+  const size = style.size ?? FONT_SIZE_HALF_POINTS;
+  return splitInlineMath(text ?? "").map((seg) =>
+    seg.kind === "text"
+      ? new DocxTextRun({
+          text: seg.value,
+          bold: style.bold,
+          italics: style.italic,
+          underline: style.underline ? {} : undefined,
+          font: FONT_FAMILY,
+          size,
+        })
+      : buildInlineMath(seg.nodes)
+  );
+}
 
 // ---- Fixed office formatting constants (do not change) -------------------
 const FONT_FAMILY = "Times New Roman";
@@ -62,17 +87,10 @@ function heading(block: Extract<DocumentBlock, { type: "heading" }>): Paragraph 
   return new Paragraph({
     alignment: mapAlignment(block.alignment ?? "center"),
     spacing: { after: 200 },
-    children: [
-      new DocxTextRun({
-        text: block.content,
-        bold: block.bold ?? true,
-        font: FONT_FAMILY,
-        size:
-          block.level === 1
-            ? HEADING_SIZE_HALF_POINTS
-            : FONT_SIZE_HALF_POINTS,
-      }),
-    ],
+    children: textToDocxRuns(block.content, {
+      bold: block.bold ?? true,
+      size: block.level === 1 ? HEADING_SIZE_HALF_POINTS : FONT_SIZE_HALF_POINTS,
+    }),
   });
 }
 
@@ -80,16 +98,8 @@ function paragraph(block: Extract<DocumentBlock, { type: "paragraph" }>): Paragr
   return new Paragraph({
     alignment: mapAlignment(block.alignment ?? "justify"),
     spacing: { after: 160 },
-    children: block.runs.map(
-      (r) =>
-        new DocxTextRun({
-          text: r.text,
-          bold: r.bold,
-          italics: r.italic,
-          underline: r.underline ? {} : undefined,
-          font: FONT_FAMILY,
-          size: FONT_SIZE_HALF_POINTS,
-        })
+    children: block.runs.flatMap((r) =>
+      textToDocxRuns(r.text, { bold: r.bold, italic: r.italic, underline: r.underline })
     ),
   });
 }
@@ -111,17 +121,8 @@ function dottedLine(block: Extract<DocumentBlock, { type: "dotted_line" }>): Par
       },
     ],
     children: [
-      new DocxTextRun({
-        text: `${label}${label.endsWith(":") ? "" : ":"}\t`,
-        font: FONT_FAMILY,
-        size: FONT_SIZE_HALF_POINTS,
-      }),
-      new DocxTextRun({
-        text: value,
-        bold: true,
-        font: FONT_FAMILY,
-        size: FONT_SIZE_HALF_POINTS,
-      }),
+      ...textToDocxRuns(`${label}${label.endsWith(":") ? "" : ":"}\t`),
+      ...textToDocxRuns(value, { bold: true }),
     ],
   });
 }
@@ -135,14 +136,7 @@ function buildCell(cell: TableCell): DocxTableCell {
     children: [
       new Paragraph({
         alignment: mapAlignment(cell.alignment ?? "left"),
-        children: [
-          new DocxTextRun({
-            text: cell.content ?? "",
-            bold: cell.bold,
-            font: FONT_FAMILY,
-            size: FONT_SIZE_HALF_POINTS,
-          }),
-        ],
+        children: textToDocxRuns(cell.content ?? "", { bold: cell.bold }),
       }),
     ],
   });

@@ -240,5 +240,34 @@ thị thông báo tiếng Việt tương ứng ngay trên từng thẻ ảnh:
 - Bản PDF dùng font Liberation Serif (thay cho Times New Roman thật vì lý do bản
   quyền — xem mục 6) nên có thể lệch độ rộng dòng vài phần trăm so với Word ở các
   đoạn văn rất dài; với văn bản hành chính thông thường thì không đáng kể.
-- Có thể thêm OCR fallback (Tesseract.js) cho trường hợp không có API Key, tuy
-  chất lượng nhận diện chữ viết tay sẽ kém hơn nhiều so với Gemini.
+## 13. Công thức toán học (mới)
+
+Bản cập nhật này thêm hỗ trợ đọc và xuất **công thức toán học thật** (lũy thừa,
+phân số, căn thức, đạo hàm, giới hạn, tổng, tích phân...) thay vì làm phẳng
+thành chữ thường như trước:
+
+- `utils/geminiPrompt.ts` yêu cầu Gemini viết công thức bằng một tập lệnh
+  LaTeX rút gọn, đặt trong cặp `$...$` ngay trong `content`/`text`/`value`
+  hiện có (không đổi schema JSON) — ví dụ `"$y' = 5x^{4}$"`.
+- `utils/mathParser.ts` phân tích cú pháp `$...$` này thành cây `MathNode`
+  (xem `types/index.ts`).
+- **Xuất Word**: `utils/docxMath.ts` dựng cây đó thành công thức OMML gốc của
+  Word (`docx` package, class `Math`/`MathRun`/`MathFraction`/...) — mở file
+  ra công thức có thể **bấm vào sửa trực tiếp trong Word**, không phải ảnh.
+- **Xuất PDF**: `utils/pdfMath.ts` tự vẽ công thức thủ công bằng jsPDF (dịch
+  baseline cho số mũ/chỉ số, vẽ vạch phân số, vẽ dấu căn...) vì jsPDF không hỗ
+  trợ OMML — chất lượng tốt cho các công thức phổ biến (lũy thừa, phân số, căn,
+  hàm lượng giác, giới hạn, tổng, tích phân) nhưng không đẹp bằng Word với các
+  biểu thức lồng nhau quá phức tạp.
+- Khung sửa (`BlockEditor.tsx`) hiển thị thêm một dòng xem trước công thức đã
+  render (dùng KaTeX, `components/MathText.tsx`) ngay dưới ô nhập, để kiểm tra
+  Gemini đọc đúng công thức trước khi tải file — còn ô nhập vẫn là text thường
+  nên vẫn gõ/sửa trực tiếp cú pháp `$...$` được, không cần UI riêng.
+- Ô bảng, dòng chấm chấm và khối chữ ký nếu có công thức sẽ hiển thị dạng chữ
+  gần đúng (`utils/mathPlainText.ts`, ví dụ `x^2`, `√(x)`) thay vì công thức
+  vẽ đầy đủ, để không phải xử lý layout phức tạp ở những chỗ đó.
+
+Giới hạn: bộ cú pháp chỉ hỗ trợ những gì đề thi Toán phổ thông thường dùng
+(không phải toàn bộ LaTeX) — xem danh sách lệnh trong `SYSTEM_INSTRUCTION` ở
+`utils/geminiPrompt.ts`.
+
