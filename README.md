@@ -271,3 +271,17 @@ Giới hạn: bộ cú pháp chỉ hỗ trợ những gì đề thi Toán phổ 
 (không phải toàn bộ LaTeX) — xem danh sách lệnh trong `SYSTEM_INSTRUCTION` ở
 `utils/geminiPrompt.ts`.
 
+### 13.1. Sửa lỗi: hàm lượng giác bình phương (cos²x, sin²x, tan²x, cot²x)
+
+Phát hiện khi test với đề thi thật: viết `\cos{x}^{2}` (cú pháp được dạy cho
+Gemini) trước đây bị dựng thành **"cos x²"** thay vì **"cos²x"** — số mũ trôi
+ra sau đối số `x` thay vì nằm ngay sau tên hàm, ở cả Word lẫn PDF. Đã sửa:
+
+- `utils/pdfMath.ts` và `utils/docxMath.ts`: nhận diện pattern
+  `sup{base: func}` (tức "hàm số được nâng lũy thừa") và đặt số mũ ngay sau
+  tên hàm, tách đối số ra ngoài.
+- Riêng bản Word: phải tự dựng thêm một "run chữ đứng" (`m:sty="p"`) bằng các
+  lớp XML cấp thấp của `docx` package, vì cách làm cũ dựa vào `MathFunction`
+  để Word tự hiển thị tên hàm chữ đứng (không nghiêng) — bỏ `MathFunction` đi
+  thì mất luôn kiểu chữ đó nếu không bù lại thủ công.
+

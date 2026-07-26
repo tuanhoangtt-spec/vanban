@@ -39,8 +39,24 @@ function measureNode(ctx: Ctx, node: MathNode, sizePt: number): number {
       const den = measureMath(ctx, node.den, sizePt * SHRINK);
       return Math.max(num, den) + 2 * FRAC_GAP_PT * PT_TO_MM;
     }
-    case "sup":
+    case "sup": {
+      // "cos^{2}{x}" etc. parses as sup{base:[func cos x], sup:[2]}. Drawing
+      // that literally (base, then superscript) reads as "cos x²" — the
+      // exponent looks like it belongs to the argument, not the function —
+      // instead of the intended "cos²x". Detect that shape and lay the
+      // exponent right after the function name instead, matching how the
+      // notation is actually printed.
+      const funcSup = asFuncSup(node);
+      if (funcSup) {
+        setMathFont(doc, sizePt, "normal");
+        const label = FUNC_LABEL[funcSup.fn.name] ?? funcSup.fn.name;
+        const labelW = doc.getTextWidth(label);
+        const supW = measureMath(ctx, funcSup.sup, sizePt * SHRINK);
+        const spaceW = doc.getTextWidth(" ");
+        return labelW + supW + spaceW + measureMath(ctx, funcSup.fn.children, sizePt);
+      }
       return measureMath(ctx, node.base, sizePt) + measureMath(ctx, node.sup, sizePt * SHRINK);
+    }
     case "sub":
       return measureMath(ctx, node.base, sizePt) + measureMath(ctx, node.sub, sizePt * SHRINK);
     case "subsup":
@@ -83,6 +99,18 @@ function measureNode(ctx: Ctx, node: MathNode, sizePt: number): number {
     default:
       return 0;
   }
+}
+
+// Recognizes the sup{base:[func ...]} shape produced when parsing e.g.
+// "\cos{x}^{2}" so it can be special-cased (see the "sup" branches above
+// and below).
+function asFuncSup(
+  node: Extract<MathNode, { t: "sup" }>
+): { fn: Extract<MathNode, { t: "func" }>; sup: MathNode[] } | null {
+  if (node.base.length === 1 && node.base[0].t === "func") {
+    return { fn: node.base[0], sup: node.sup };
+  }
+  return null;
 }
 
 const FUNC_LABEL: Record<string, string> = {
@@ -129,6 +157,17 @@ function drawNode(ctx: Ctx, x: number, y: number, node: MathNode, sizePt: number
       return x + w + gap;
     }
     case "sup": {
+      const funcSup = asFuncSup(node);
+      if (funcSup) {
+        setMathFont(doc, sizePt, "normal");
+        const label = FUNC_LABEL[funcSup.fn.name] ?? funcSup.fn.name;
+        doc.text(label, x, y);
+        const labelW = doc.getTextWidth(label);
+        drawMath(ctx, x + labelW, y - riseMm, funcSup.sup, sizePt * SHRINK);
+        const supW = measureMath(ctx, funcSup.sup, sizePt * SHRINK);
+        const spaceW = doc.getTextWidth(" ");
+        return drawMath(ctx, x + labelW + supW + spaceW, y, funcSup.fn.children, sizePt);
+      }
       const baseEndX = drawMath(ctx, x, y, node.base, sizePt);
       drawMath(ctx, baseEndX, y - riseMm, node.sup, sizePt * SHRINK);
       return baseEndX + measureMath(ctx, node.sup, sizePt * SHRINK);
