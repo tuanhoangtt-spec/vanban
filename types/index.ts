@@ -81,6 +81,24 @@ export type SpacerBlock = {
   type: "spacer";
 };
 
+// A graphic region (chart, diagram, hand-drawn figure, logo, signature scan...)
+// that can't be turned into text or a table without losing information.
+// Gemini only supplies the bounding box (as fractions 0..1 of the SOURCE
+// page, top-left origin) plus a short caption for the editor UI — it does
+// NOT supply image bytes. `dataUrl` is filled in afterwards, client-side, by
+// utils/imageCrop.ts, which crops that bbox out of the original uploaded
+// file (or the matching PDF page) and stores the result as a PNG data URL.
+// Until that crop step runs, dataUrl is undefined and the block renders as
+// a "[Hình minh họa]" placeholder — see docxGenerator.ts / pdfGenerator.ts.
+export type ImageBlock = {
+  type: "image";
+  bbox: { x: number; y: number; width: number; height: number };
+  page?: number; // 1-based source page, for multi-page PDFs. Defaults to 1.
+  caption?: string;
+  alignment?: BlockAlignment;
+  dataUrl?: string; // "data:image/png;base64,..." — set by utils/imageCrop.ts
+};
+
 // Marks a page boundary from a multi-page source (PDF). Renders as an
 // explicit page break in both the .docx and .pdf export.
 export type PageBreakBlock = {
@@ -94,6 +112,7 @@ export type DocumentBlock =
   | TableBlock
   | SignatureBlock
   | SpacerBlock
+  | ImageBlock
   | PageBreakBlock;
 
 export type ParsedDocument = {

@@ -6,6 +6,7 @@ import {
   Table,
   TableRow,
   TableCell as DocxTableCell,
+  ImageRun,
   AlignmentType,
   BorderStyle,
   WidthType,
@@ -22,6 +23,28 @@ import type {
 } from "@/types";
 import { splitInlineMath } from "./mathParser";
 import { buildInlineMath } from "./docxMath";
+
+// "data:image/png;base64,...." -> raw bytes. Works in both the browser
+// (atob) and the Node test harness (Buffer), since utils/imageCrop.ts always
+// produces PNG data URLs via canvas.toDataURL("image/png").
+function base64ToBytes(base64: string): Uint8Array {
+  if (typeof atob === "function") {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+  return new Uint8Array(Buffer.from(base64, "base64"));
+}
+
+// Reads width/height straight out of the PNG IHDR chunk (bytes 16-23) so we
+// can scale-to-fit without needing an <img> load round-trip.
+function pngPixelSize(bytes: Uint8Array): { width: number; height: number } {
+  if (bytes.length < 24) return { width: 640, height: 480 };
+  const width = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+  const height = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+  return { width: width >>> 0 || 640, height: height >>> 0 || 480 };
+}
 
 // Turns free text that may contain "$...$" formulas into a mix of ordinary
 // DocxTextRun (for plain text, keeping the requested styling) and native
@@ -53,6 +76,10 @@ const HEADING_SIZE_HALF_POINTS = 32; // 16pt, ~2pt larger than body, still Times
 const PAGE_WIDTH_DXA = 11906; // A4
 const PAGE_HEIGHT_DXA = 16838; // A4
 const MARGIN_DXA = 1134; // 2cm
+// DXA -> px at 96dpi (1in = 1440dxa = 96px), used only to scale embedded
+// images to fit within the page's printable width.
+const MAX_IMAGE_WIDTH_PX = Math.floor((PAGE_WIDTH_DXA - MARGIN_DXA * 2) / 15);
+const MAX_IMAGE_HEIGHT_PX = 640;
 
 const CELL_BORDER = {
   style: BorderStyle.SINGLE,
@@ -230,29 +257,79 @@ function signatureRow(
   });
 }
 
-function blockToDocxElement(block: DocumentBlock): Paragraph | Table {
+function imageBlock(block: Extract<DocumentBlock, { type: "image" }>): Paragraph[] {
+  const placeholder = () => [
+    new Paragraph({
+      alignment: mapAlignment(block.alignment ?? "left"),
+      spacing: { after: 160 },
+      children: textToDocxRuns(
+        `[Hình minh họa${block.caption ? ": " + block.caption : ""}]`,
+        { italic: true }
+      ),
+    }),
+  ];
+
+  if (!block.dataUrl) return placeholder();
+
+  try {
+    const bytes = base64ToBytes(block.dataUrl.split(",")[1] ?? "");
+    const { width: pxWidth, height: pxHeight } = pngPixelSize(bytes);
+    const scale = Math.min(MAX_IMAGE_WIDTH_PX / pxWidth, MAX_IMAGE_HEIGHT_PX / pxHeight, 1);
+    const width = Math.max(1, Math.round(pxWidth * scale));
+    const height = Math.max(1, Math.round(pxHeight * scale));
+
+    const paragraphs = [
+      new Paragraph({
+        alignment: mapAlignment(block.alignment ?? "center"),
+        spacing: { after: block.caption ? 60 : 160 },
+        children: [new ImageRun({ type: "png", data: bytes, transformation: { width, height } })],
+      }),
+    ];
+    if (block.caption) {
+      paragraphs.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 160 },
+          children: textToDocxRuns(block.caption, {
+            italic: true,
+            size: FONT_SIZE_HALF_POINTS - 4,
+          }),
+        })
+      );
+    }
+    return paragraphs;
+  } catch (err) {
+    // A malformed data URL shouldn't take the whole export down.
+    console.error("Không chèn được hình minh họa vào Word:", err);
+    return placeholder();
+  }
+}
+
+function blockToDocxElements(block: DocumentBlock): (Paragraph | Table)[] {
   switch (block.type) {
     case "heading":
-      return heading(block);
+      return [heading(block)];
     case "paragraph":
-      return paragraph(block);
+      return [paragraph(block)];
     case "dotted_line":
-      return dottedLine(block);
+      return [dottedLine(block)];
     case "table":
-      return table(block);
+      return [table(block)];
     case "signature_row":
-      return signatureRow(block);
+      return [signatureRow(block)];
+    case "image":
+      return imageBlock(block);
     case "page_break":
-      return new Paragraph({ children: [new PageBreak()] });
+      return [new Paragraph({ children: [new PageBreak()] })];
     case "spacer":
-      return new Paragraph({ text: "", spacing: { after: 160 } });
+      return [new Paragraph({ text: "", spacing: { after: 160 } })];
     default:
-      return new Paragraph({ text: "" });
+      return [new Paragraph({ text: "" })];
   }
 }
 
 export function buildDocx(doc: ParsedDocument): Document {
-  const children = doc.blocks.map(blockToDocxElement);
+  const children = doc.blocks.flatMap(blockToDocxElements);
 
   return new Document({
     styles: {

@@ -293,6 +293,54 @@ function drawSignatureRow(doc: jsPDF, cursor: PdfCursor, block: Extract<Document
   cursor.advance(blockHeight);
 }
 
+function drawImage(doc: jsPDF, cursor: PdfCursor, block: Extract<DocumentBlock, { type: "image" }>) {
+  if (!block.dataUrl) {
+    // Cropping hasn't run yet (or failed) — same text placeholder the app
+    // used before "image" blocks existed, so nothing is silently dropped.
+    drawInlineRuns(
+      doc,
+      cursor,
+      [{ text: `[Hình minh họa${block.caption ? ": " + block.caption : ""}]`, italic: true }],
+      { align: block.alignment ?? "left" }
+    );
+    cursor.advance(BLOCK_GAP_MM * 0.6);
+    return;
+  }
+
+  try {
+    const props = doc.getImageProperties(block.dataUrl);
+    const maxWidthMm = CONTENT_WIDTH_MM;
+    const maxHeightMm = 120; // cap so one figure can't consume the whole page
+    let wMm = maxWidthMm;
+    let hMm = (props.height / props.width) * wMm;
+    if (hMm > maxHeightMm) {
+      hMm = maxHeightMm;
+      wMm = (props.width / props.height) * hMm;
+    }
+
+    cursor.ensureSpace(hMm + BLOCK_GAP_MM);
+    const align = block.alignment ?? "center";
+    let x = MARGIN_MM;
+    if (align === "center") x = MARGIN_MM + (CONTENT_WIDTH_MM - wMm) / 2;
+    else if (align === "right") x = MARGIN_MM + CONTENT_WIDTH_MM - wMm;
+
+    doc.addImage(block.dataUrl, "PNG", x, cursor.y, wMm, hMm);
+    cursor.advance(hMm + (block.caption ? 1.5 : BLOCK_GAP_MM));
+
+    if (block.caption) {
+      doc.setFont(PDF_FONT_FAMILY, "italic");
+      doc.setFontSize(FONT_SIZE_PT - 2);
+      doc.text(textWithMathToPlain(block.caption), MARGIN_MM + CONTENT_WIDTH_MM / 2, cursor.y, {
+        align: "center",
+      });
+      cursor.advance(LINE_HEIGHT_MM * 0.8 + BLOCK_GAP_MM * 0.4);
+    }
+  } catch (err) {
+    // A corrupt/oversized data URL shouldn't take the whole export down.
+    console.error("Không chèn được hình minh họa vào PDF:", err);
+  }
+}
+
 function drawBlock(doc: jsPDF, cursor: PdfCursor, block: DocumentBlock) {
   switch (block.type) {
     case "heading":
@@ -305,6 +353,8 @@ function drawBlock(doc: jsPDF, cursor: PdfCursor, block: DocumentBlock) {
       return drawTable(doc, cursor, block);
     case "signature_row":
       return drawSignatureRow(doc, cursor, block);
+    case "image":
+      return drawImage(doc, cursor, block);
     case "page_break":
       return cursor.forcePageBreak();
     case "spacer":

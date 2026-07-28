@@ -285,3 +285,38 @@ ra sau đối số `x` thay vì nằm ngay sau tên hàm, ở cả Word lẫn PD
   để Word tự hiển thị tên hàm chữ đứng (không nghiêng) — bỏ `MathFunction` đi
   thì mất luôn kiểu chữ đó nếu không bù lại thủ công.
 
+## 14. Chèn lại hình vẽ/đồ thị gốc (mới)
+
+Phát hiện khi test với đề thi có đồ thị hàm số: trước đây gặp hình vẽ minh
+họa (đồ thị, sơ đồ...), hệ thống chỉ ghi lại dòng chữ `[Hình minh họa: ...]`
+thay vì hình thật — người dùng mất hẳn hình khi tải file. Đã sửa bằng cách
+thêm block type mới `"image"`:
+
+- Gemini (`utils/geminiPrompt.ts`, rule 14) chỉ cần trả về **toạ độ khung
+  (bbox)** quanh hình đó — tỉ lệ 0..1 so với chiều rộng/cao trang, không phải
+  trả ảnh (tốn token, dễ lỗi với model vision).
+- `utils/imageCrop.ts` (chạy phía trình duyệt) cắt đúng vùng bbox đó ra từ
+  file gốc người dùng tải lên: ảnh → cắt trực tiếp bằng `<canvas>`; PDF →
+  dựng trang bằng `pdfjs-dist` thành ảnh trước rồi mới cắt. Kết quả là một
+  PNG data URL gắn vào block, gọi ngay sau khi Gemini trả JSON (`app/page.tsx`).
+- `docxGenerator.ts` dùng `ImageRun` của package `docx`, `pdfGenerator.ts`
+  dùng `doc.addImage()` của jsPDF để nhúng ảnh thật, tự co theo khổ trang.
+- Nếu vì lý do gì đó bbox lỗi hoặc chưa cắt kịp, block vẫn có fallback về
+  dòng chữ `[Hình minh họa: ...]` như cũ — không bao giờ crash hay mất trắng.
+
+Giới hạn: bbox do Gemini ước lượng nên có thể lệch/thừa biên đôi chút (đã dặn
+Gemini thà ước lượng rộng hơn còn hơn cắt hụt); độ nét ảnh cắt từ PDF phụ
+thuộc độ phân giải dựng trang (`PDF_RENDER_SCALE` trong `imageCrop.ts`, mặc
+định scale=2, có thể tăng nếu cần ảnh nét hơn nhưng file sẽ nặng hơn).
+
+## 15. Sửa lỗi: mất "ô vuông" nhập từng ký tự (số CCCD...) (mới)
+
+Phát hiện khi test với mẫu tờ khai CT01 thật: dãy ô vuông rời để nhập từng
+số một (như 12 ô số định danh cá nhân) bị mất khi convert. Nguyên nhân: rule
+6 cũ mô tả "bảng biểu" là thứ "có nhiều hàng nhiều cột", nên một dãy CHỈ 1
+HÀNG nhiều ô vuông rỗng nhiều khả năng không được Gemini xếp vào loại
+"table" và bị bỏ qua. Đã bổ sung rule 6 nêu rõ: dãy ô vuông 1 hàng để điền
+từng ký tự vẫn PHẢI là `"table"` (1 hàng, mỗi ô vuông là 1 cột, content để
+trống). Không cần sửa code dựng bảng — `docxGenerator.ts`/`pdfGenerator.ts`
+vốn đã vẽ viền ô đầy đủ cho mọi bảng, chỉ cần Gemini phân loại đúng.
+

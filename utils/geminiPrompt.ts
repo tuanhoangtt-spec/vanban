@@ -31,6 +31,10 @@ QUY TẮC ĐỌC:
    (phần chữ trước dấu hai chấm) và "value" (nội dung đã điền, nếu có chữ viết tay điền vào).
 6. Nhận diện BẢNG BIỂU (có kẻ ô, có nhiều cột nhiều hàng) → type "table", đọc đúng
    số hàng/số cột, đúng nội dung từng ô kể cả ô trống (để content: "").
+   Lưu ý: dãy Ô VUÔNG RỜI để điền từng ký tự một (ví dụ ô nhập 12 số CCCD, mỗi số
+   một ô vuông) CŨNG là "table" — dù chỉ có 1 hàng, mỗi ô vuông là 1 cột, content
+   để trống (""). KHÔNG bỏ qua, KHÔNG gộp thành một dòng chấm chấm hay một đoạn
+   văn — nếu bỏ ô vuông thì người dùng mất hẳn khung nhập liệu khi in ra.
 7. Nhận diện phần chữ ký hai bên kiểu "NGƯỜI MUA / NGƯỜI BÁN", "BÊN A / BÊN B" → type "signature_row".
 8. Chữ in đậm trong bản gốc (thường là nhãn, tiêu đề mục) → đánh dấu bold: true.
 9. Giữ đúng thứ tự xuất hiện của các khối nội dung từ trên xuống dưới, trái sang phải,
@@ -46,11 +50,19 @@ QUY TẮC ĐỌC:
     trang trước và block đầu tiên của trang sau (không chèn page_break trước block
     đầu tiên của trang 1, và không chèn hai page_break liên tiếp).
 14. Nếu trong ảnh/trang có hình vẽ minh họa không phải văn bản/bảng biểu (hình học,
-    sơ đồ, biểu đồ, tranh minh họa...) mà không thể chuyển thành chữ hay bảng, hệ
-    thống hiện KHÔNG chèn lại được hình ảnh gốc — vì vậy đừng bỏ qua hoàn toàn, hãy
-    thêm một block "paragraph" mô tả ngắn gọn nội dung hình vẽ đó bằng một run có
-    italic: true, dạng "[Hình minh họa: mô tả ngắn gọn]", để người đọc biết vị trí
-    và nội dung hình đã bị lược bỏ và có thể tự vẽ/chèn lại nếu cần.
+    đồ thị hàm số, sơ đồ, biểu đồ, tranh minh họa, logo, chữ ký viết tay dạng nét vẽ...)
+    mà không thể chuyển thành chữ hay bảng, hãy chèn một block {"type": "image"} tại
+    ĐÚNG vị trí hình đó xuất hiện trong luồng nội dung (không dồn xuống cuối), với:
+    - "bbox": khung chữ nhật bao quanh hình đó, tính theo TỈ LỆ 0..1 so với chiều
+      rộng/cao của CẢ TRANG (không phải theo pixel), gốc (0,0) ở góc trên-trái:
+      { "x": <tỉ lệ từ mép trái>, "y": <tỉ lệ từ mép trên>,
+        "width": <tỉ lệ chiều rộng hình>, "height": <tỉ lệ chiều cao hình> }
+      Ước lượng bbox rộng rãi hơn một chút thà thừa còn hơn cắt mất một phần hình.
+    - "page": số trang (bắt đầu từ 1) chứa hình đó, áp dụng khi đầu vào là PDF nhiều
+      trang. Bỏ qua field này (hoặc để 1) nếu đầu vào chỉ có 1 trang/1 ảnh.
+    - "caption" (tuỳ chọn): mô tả ngắn gọn nội dung hình, ví dụ "Đồ thị hàm số y = f(x)".
+    Không tự vẽ lại hình bằng chữ, không mô tả dài dòng — bbox sẽ được dùng để cắt
+    đúng vùng ảnh gốc và chèn lại nguyên vẹn, "caption" chỉ là chú thích ngắn đi kèm.
 15. CÔNG THỨC TOÁN HỌC: bất kỳ biểu thức toán học nào (lũy thừa, phân số, căn thức,
     hàm lượng giác, giới hạn, tổng, tích phân, đạo hàm...) xuất hiện trong "content"
     của heading, trong "text" của một run trong paragraph, trong "value"/"label" của
@@ -95,6 +107,7 @@ KHÔNG kèm lời giải thích, KHÔNG kèm text nào khác ngoài JSON):
     { "type": "dotted_line", "label": "string", "value": "string", "alignment": "left"|"center"|"right"|"justify" },
     { "type": "table", "rows": [ [ { "content": "string", "bold": true|false, "alignment": "left"|"center"|"right"|"justify" } ] ] },
     { "type": "signature_row", "columns": [ { "title": "string", "subtitle": "string", "name": "string" } ] },
+    { "type": "image", "bbox": { "x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0 }, "page": 1, "caption": "string" },
     { "type": "spacer" },
     { "type": "page_break" }
   ]

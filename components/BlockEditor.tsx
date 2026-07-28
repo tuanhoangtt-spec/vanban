@@ -1,7 +1,7 @@
 "use client";
 
 import type { DocumentBlock, ParsedDocument, TableCell } from "@/types";
-import { Heading, Rows3, AlignJustify, MoreHorizontal, PenLine, FileStack } from "lucide-react";
+import { Heading, Rows3, AlignJustify, MoreHorizontal, PenLine, FileStack, ImageIcon } from "lucide-react";
 import { MathText } from "./MathText";
 
 const hasMath = (text: string) => /\$[^$]+\$/.test(text ?? "");
@@ -209,6 +209,34 @@ export function BlockEditor({
                       />
                     </div>
                   ))}
+                </div>
+              </div>
+            );
+
+          case "image":
+            return (
+              <div key={i} className="space-y-1">
+                <BlockTag icon={ImageIcon} label="Hình minh họa" />
+                <div className="rounded-lg border border-ink/15 bg-ink/[0.02] p-2 flex items-start gap-3">
+                  {block.dataUrl ? (
+                    <img
+                      src={block.dataUrl}
+                      alt={block.caption ?? "Hình minh họa"}
+                      className="max-h-32 rounded border border-ink/10 shrink-0"
+                    />
+                  ) : (
+                    <div className="h-16 w-24 shrink-0 rounded border border-dashed border-ink/20 flex items-center justify-center text-[10px] text-ink/35 text-center px-1">
+                      Đang cắt hình...
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <AutoTextarea
+                      ariaLabel="Chú thích hình"
+                      value={block.caption ?? ""}
+                      onChange={(v) => updateBlock(i, { ...block, caption: v })}
+                      className="text-xs italic"
+                    />
+                  </div>
                 </div>
               </div>
             );
