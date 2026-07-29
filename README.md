@@ -320,3 +320,49 @@ từng ký tự vẫn PHẢI là `"table"` (1 hàng, mỗi ô vuông là 1 cột
 trống). Không cần sửa code dựng bảng — `docxGenerator.ts`/`pdfGenerator.ts`
 vốn đã vẽ viền ô đầy đủ cho mọi bảng, chỉ cần Gemini phân loại đúng.
 
+## 16. Sửa lỗi: `npm run build` thất bại vì worker của pdfjs-dist (mới)
+
+**Phát hiện bằng cách chạy thật `npm run build`** (không phải đoán) — build
+production của Next.js báo lỗi:
+
+```
+static/media/pdf.worker.min.xxxxx.mjs from Terser
+x 'import', and 'export' cannot be used outside of module code
+```
+
+**Nguyên nhân:** cách nạp worker cũ dùng
+`new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url)` — Next.js
+nhận diện được cú pháp này, tự copy file worker thành asset tĩnh, NHƯNG sau
+đó vẫn chạy Terser để minify asset đó như một file JS thường. File worker của
+pdfjs-dist lại là ES module thật (có `import`/`export` ở top-level), Terser
+mặc định không parse được cú pháp module nên build gãy ở bước production
+(`next dev` không bị vì dev không minify). Đây là lỗi đã biết, chưa được
+Next.js team xử lý dứt điểm (xem thảo luận
+[vercel/next.js#61549](https://github.com/vercel/next.js/discussions/61549));
+các cách né phổ biến trên đó đều dựa vào CDN ngoài (unpkg, cdnjs), không hợp
+với thiết kế "$0, tự chủ hoàn toàn, không phụ thuộc dịch vụ ngoài" của app
+này.
+
+**Đã sửa (không cần CDN):**
+- `scripts/copy-pdf-worker.js` (MỚI) — copy thẳng
+  `node_modules/pdfjs-dist/build/pdf.worker.min.mjs` vào `public/pdf.worker.min.mjs`.
+- `package.json` — thêm script `"postinstall": "node scripts/copy-pdf-worker.js"`
+  để file này tự động được copy lại mỗi khi `npm install` (kể cả trên máy
+  build của Vercel), luôn khớp đúng phiên bản `pdfjs-dist` đang cài.
+- `utils/imageCrop.ts` — đổi `GlobalWorkerOptions.workerSrc` từ
+  `new URL(...)` sang chuỗi tĩnh `"/pdf.worker.min.mjs"` (trỏ vào file vừa
+  copy ở `public/`). Vì đây chỉ là một chuỗi string bình thường, webpack
+  không còn nhận diện/đóng gói/minify file worker nữa — Terser không bao giờ
+  chạm vào nó, nên lỗi biến mất.
+- `public/pdf.worker.min.mjs` — file thực tế được thêm vào repo (được
+  copy tự động, nhưng commit sẵn 1 bản để môi trường build không có mạng
+  npm vẫn chạy được `next build` ngay cả khi bỏ qua bước `postinstall`).
+
+**Đã xác nhận:** chạy `npm run build` thật (Next.js 14.2.35) từ sạch —
+trước khi sửa: build gãy đúng lỗi trên; sau khi sửa: `✓ Compiled successfully`,
+build ra static page hoàn chỉnh. (Lưu ý: trong sandbox không có mạng ra
+Google Fonts nên phải tạm bỏ `next/font/google` để test bước webpack riêng —
+đã khôi phục lại `app/layout.tsx` nguyên trạng sau khi xác nhận xong; lỗi
+font đó là do sandbox không có mạng, không liên quan đến bug này, sẽ không
+xảy ra khi build trên Vercel có mạng thật.)
+

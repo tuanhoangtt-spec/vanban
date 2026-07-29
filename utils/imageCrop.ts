@@ -16,12 +16,21 @@ let pdfjsLibPromise: Promise<typeof import("pdfjs-dist")> | null = null;
 async function getPdfjs() {
   if (!pdfjsLibPromise) {
     pdfjsLibPromise = import("pdfjs-dist").then((lib) => {
-      // Next.js/webpack understands this `new URL(..., import.meta.url)`
-      // form and emits the worker as a static asset automatically.
-      lib.GlobalWorkerOptions.workerSrc = new URL(
-        "pdfjs-dist/build/pdf.worker.min.mjs",
-        import.meta.url
-      ).toString();
+      // Deliberately NOT `new URL("pdfjs-dist/build/pdf.worker.min.mjs",
+      // import.meta.url)`: that form makes Next.js's production build emit
+      // the worker as a static/media/*.mjs asset and then run Terser over
+      // it, which fails because the worker file itself is an ES module
+      // (top-level import/export) and Terser's default (non-module) parser
+      // rejects that syntax. This is a known, still-unresolved Next.js +
+      // pdfjs-dist interaction — see
+      // https://github.com/vercel/next.js/discussions/61549
+      //
+      // Instead we serve the worker as a plain static file from `public/`
+      // (copied there automatically by scripts/copy-pdf-worker.js via the
+      // "postinstall" npm script) and point pdfjs at it with an ordinary
+      // string path. Webpack never touches this file, so the bug doesn't
+      // apply, and we stay CDN-free.
+      lib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
       return lib;
     });
   }
