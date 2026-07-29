@@ -122,7 +122,6 @@ async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
 
   const ai = new GoogleGenAI({ apiKey });
   const base64 = await fileToBase64(file);
-  const isPdf = file.type === "application/pdf";
 
   let resultText: string;
   try {
@@ -148,27 +147,43 @@ async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
         // response with finishReason "MAX_TOKENS" — no error, just nothing.
         // Capping the thinking budget and raising maxOutputTokens generously
         // guarantees room is left for the actual JSON to be written out.
-        maxOutputTokens: isPdf ? 32768 : 16384,
-        thinkingConfig: { thinkingBudget: isPdf ? 4096 : 2048 },
+        //
+        // Images used to get a smaller budget than PDFs on the assumption
+        // they'd be simpler (e.g. one photographed page). Real-world testing
+        // with a dense government form (CT01 — 84 table cells across a
+        // household-member grid and two digit-box sequences, all as a single
+        // JPG) showed that assumption was wrong: the model was cut off
+        // mid-JSON at 16384 tokens. Images can be just as content-dense as
+        // PDF pages, so both now get the same generous budget.
+        maxOutputTokens: 32768,
+        thinkingConfig: { thinkingBudget: 4096 },
       },
     });
 
     const finishReason = response.candidates?.[0]?.finishReason;
     resultText = response.text ?? "";
 
+    // Check finishReason BEFORE looking at whether resultText is empty.
+    // Truncation from hitting maxOutputTokens doesn't always leave an empty
+    // response — it can leave a partial, non-empty chunk of JSON cut off
+    // mid-string/mid-object. That partial text would previously skip this
+    // whole block (since the old check only ran when resultText was empty)
+    // and fall through to a plain JSON.parse() failure below, surfacing a
+    // generic "AI trả về dữ liệu không đúng định dạng JSON" error that gave
+    // no hint about *why* — even though we already knew exactly why.
+    if (finishReason === "MAX_TOKENS") {
+      throw new GeminiError(
+        "PARSE",
+        "Ảnh/PDF có quá nhiều nội dung khiến AI chưa viết xong phản hồi trong giới hạn token. Vui lòng thử lại, hoặc chụp/crop ảnh thành từng phần nhỏ hơn nếu ảnh có rất nhiều chữ."
+      );
+    }
+    if (finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT") {
+      throw new GeminiError(
+        "PARSE",
+        "Gemini từ chối xử lý ảnh này (bị chặn bởi bộ lọc an toàn nội dung). Vui lòng thử ảnh khác."
+      );
+    }
     if (!resultText.trim()) {
-      if (finishReason === "MAX_TOKENS") {
-        throw new GeminiError(
-          "PARSE",
-          "Ảnh có quá nhiều nội dung khiến AI chưa viết xong phản hồi trong giới hạn token. Vui lòng thử lại, hoặc chụp/crop ảnh thành từng phần nhỏ hơn nếu ảnh có rất nhiều chữ."
-        );
-      }
-      if (finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT") {
-        throw new GeminiError(
-          "PARSE",
-          "Gemini từ chối xử lý ảnh này (bị chặn bởi bộ lọc an toàn nội dung). Vui lòng thử ảnh khác."
-        );
-      }
       throw new GeminiError(
         "PARSE",
         `AI trả về phản hồi rỗng (finishReason: ${finishReason ?? "không rõ"}). Vui lòng thử quét lại.`

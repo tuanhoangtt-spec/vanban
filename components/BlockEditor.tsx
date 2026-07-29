@@ -226,7 +226,7 @@ export function BlockEditor({
                     />
                   ) : (
                     <div className="h-16 w-24 shrink-0 rounded border border-dashed border-ink/20 flex items-center justify-center text-[10px] text-ink/35 text-center px-1">
-                      Đang cắt hình...
+                      Không cắt được hình
                     </div>
                   )}
                   <div className="flex-1 min-w-0">

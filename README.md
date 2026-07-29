@@ -392,3 +392,70 @@ dev`, quét lại đúng file `4 (1).pdf` này) để xác nhận: (a) lỗi h�
 đồ thị được cắt và chèn đúng vị trí, (c) format công thức/toán trong đề vẫn
 đúng.
 
+## 18. Sửa lỗi: JSON bị cắt cụt khi ảnh có bảng lớn (form CT01) (mới)
+
+**Phát hiện bằng test thật của người dùng** — quét ảnh `mau-ct01-moi-nhat-1.jpg`
+(mẫu tờ khai CT01 thật) → báo lỗi "AI trả về dữ liệu không đúng định dạng
+JSON. Vui lòng thử quét lại."
+
+**Nguyên nhân:** form CT01 rất dày đặc (bảng thành viên hộ gia đình 10 hàng
+× 6 cột = 60 ô, cộng 2 dãy 12 ô vuông CCCD = 24 ô, cộng các trường khác) —
+tổng cộng JSON trả về cần khá nhiều token. Cấu hình cũ chỉ cấp
+`maxOutputTokens: 16384` cho ảnh (JPG/PNG), thấp hơn hẳn PDF (`32768`), dựa
+trên giả định sai rằng ảnh luôn đơn giản hơn PDF. Với form dày đặc này,
+Gemini bị cắt ngang giữa chừng khi đang viết JSON (`finishReason:
+"MAX_TOKENS"`) nhưng phần đã viết ra KHÔNG rỗng (chỉ là JSON không đầy đủ) —
+trong khi code cũ chỉ kiểm tra `finishReason === "MAX_TOKENS"` ở nhánh
+`resultText` HOÀN TOÀN RỖNG. Vì vậy phản hồi cụt vẫn lọt qua nhánh đó, rơi
+thẳng xuống `JSON.parse()`, thất bại, và hiện thông báo chung chung "không
+đúng định dạng JSON" — đúng hiện tượng nhưng sai nguyên nhân hiển thị cho
+người dùng.
+
+**Đã sửa** (`utils/geminiClient.ts`):
+- Kiểm tra `finishReason === "MAX_TOKENS"` (và `SAFETY`/`PROHIBITED_CONTENT`)
+  NGAY sau khi có `resultText`, không phụ thuộc `resultText` rỗng hay không
+  — để hiện đúng thông báo "quá nhiều nội dung" thay vì lỗi JSON chung
+  chung, dù response có rỗng hay chỉ là JSON cụt.
+- Bỏ phân biệt `isPdf` khi cấp ngân sách token — ảnh giờ cũng được
+  `maxOutputTokens: 32768` / `thinkingBudget: 4096` giống PDF, vì thực tế đã
+  chứng minh ảnh (form dày) có thể tốn token ngang PDF.
+
+**Lưu ý trung thực:** việc tăng ngân sách token là cách sửa hợp lý nhất có
+thể làm mà KHÔNG gọi được Gemini thật trong sandbox này để đo chính xác form
+CT01 cần bao nhiêu token — 32768 là ước lượng rộng rãi dựa theo số ô đã đếm
+được, chưa phải con số đã đo. Cần người dùng quét lại đúng file này để xác
+nhận đã đủ hay chưa; nếu vẫn cắt cụt ở form phức tạp hơn, cần tăng thêm hoặc
+cân nhắc chia nhỏ ảnh.
+
+## 19. Sửa lỗi: 1 trong 2 hình đồ thị bị cắt ra trắng tinh (mới)
+
+**Phát hiện bằng cách đọc trực tiếp file `.docx` người dùng gửi về sau khi
+quét `4 (1).pdf` thật** (không phải đoán) — dùng Python/PIL đo độ lệch chuẩn
+màu của 2 ảnh nhúng trong file: ảnh thứ nhất có nội dung thật (std ≈ 27),
+ảnh thứ hai **hoàn toàn trắng đồng nhất (std = 0)** — bbox của Gemini cho đồ
+thị thứ hai (câu "Câu hỏi dễ sai") lệch khỏi vị trí đồ thị thật, cắt trúng
+vùng trắng bên cạnh/bên dưới. Bản thân việc cắt không hề báo lỗi (canvas vẽ
+"thành công" một vùng trắng), nên ảnh trắng vô nghĩa này lọt thẳng vào file
+Word xuất ra mà không có cảnh báo gì.
+
+**Đã sửa** (`utils/imageCrop.ts`) — thêm bước kiểm tra sau khi cắt: lấy mẫu
+lưới điểm ảnh (tối đa ~64×64 điểm) trong vùng vừa cắt, tính độ lệch chuẩn độ
+sáng; nếu gần như đồng màu tuyệt đối (ngưỡng `BLANK_CROP_STD_THRESHOLD =
+2.5`) thì coi là cắt thất bại (bbox lệch), ném lỗi để rơi vào nhánh fallback
+sẵn có (không có `dataUrl` → `docxGenerator.ts`/`pdfGenerator.ts` tự động
+hiện `[Hình minh họa: ...]` bằng chữ thay vì ảnh trắng). Một hình vẽ thật
+(dù đơn giản, chỉ có trục toạ độ + 1 đường cong) luôn có độ lệch chuẩn cao
+hơn hẳn ngưỡng này vì có mực đen/xám phủ một phần đáng kể diện tích; chỉ
+vùng THỰC SỰ trắng/đồng màu mới rơi dưới ngưỡng.
+- `components/BlockEditor.tsx` — sửa luôn dòng chữ hiển thị khi ảnh không có
+  `dataUrl`, từ "Đang cắt hình..." (sai ngữ cảnh — lúc màn hình này hiện ra
+  thì việc cắt đã xong hẳn, không còn "đang" cắt nữa) thành "Không cắt được
+  hình", đúng với thực tế.
+
+**Lưu ý trung thực:** đây là fix PHÒNG THỦ (không hiện ảnh trắng vô nghĩa),
+KHÔNG PHẢI fix tận gốc (bbox của Gemini vẫn có thể lệch). Không có JSON gốc
+Gemini trả về cho lần quét này để biết bbox sai cụ thể ra sao, nên chưa thể
+sửa rule 14 trong `geminiPrompt.ts` một cách có căn cứ — cần thêm dữ liệu
+thật (vài lần quét nữa, đặc biệt các trang có NHIỀU hình xếp chồng theo
+chiều dọc như trang này) mới đủ để tinh chỉnh prompt cho đúng hướng.
+

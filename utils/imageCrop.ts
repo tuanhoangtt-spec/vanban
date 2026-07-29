@@ -74,6 +74,36 @@ function loadImageFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
+// A crop is considered "blank" (i.e. the bbox almost certainly missed the
+// actual figure and landed on empty page margin) when its pixels are nearly
+// uniform. Found via real testing: on a page with two stacked diagrams,
+// Gemini's bbox for the second one was accurate in size/shape but landed a
+// bit off vertically, producing a technically-valid but completely blank
+// PNG — no thrown error, so it silently made it all the way into the
+// exported .docx as an empty white box.
+//
+// A real diagram (even a simple line drawing: axes + one curve) always
+// covers a nontrivial fraction of pixels with ink, so its luminance std
+// deviation is comfortably above this threshold; only truly blank/near-
+// solid-color regions fall under it. Sampling a grid of points (not every
+// pixel) keeps this fast even on larger crops.
+const BLANK_CROP_STD_THRESHOLD = 2.5;
+
+function isCropBlank(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 64)); // ~64x64 sample grid max
+  const samples: number[] = [];
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+      samples.push(0.299 * r + 0.587 * g + 0.114 * b); // perceptual luminance
+    }
+  }
+  if (samples.length < 4) return false; // too small to judge reliably, don't block it
+  const mean = samples.reduce((a, v) => a + v, 0) / samples.length;
+  const variance = samples.reduce((a, v) => a + (v - mean) ** 2, 0) / samples.length;
+  return Math.sqrt(variance) < BLANK_CROP_STD_THRESHOLD;
+}
+
 function cropCanvasRegion(
   source: HTMLCanvasElement | HTMLImageElement,
   sourceWidth: number,
@@ -91,6 +121,11 @@ function cropCanvasRegion(
   const ctx = out.getContext("2d");
   if (!ctx) throw new Error("Không tạo được canvas để cắt hình minh họa.");
   ctx.drawImage(source, sx, sy, sw, sh, 0, 0, out.width, out.height);
+  if (isCropBlank(ctx, out.width, out.height)) {
+    throw new Error(
+      "Vùng cắt gần như trắng hoàn toàn — bbox có thể đã lệch khỏi hình vẽ thật."
+    );
+  }
   return out.toDataURL("image/png");
 }
 
