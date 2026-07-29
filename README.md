@@ -366,3 +366,29 @@ Google Fonts nên phải tạm bỏ `next/font/google` để test bước webpac
 font đó là do sandbox không có mạng, không liên quan đến bug này, sẽ không
 xảy ra khi build trên Vercel có mạng thật.)
 
+## 17. Sửa lỗi: "Có block với định dạng không hợp lệ" khi ảnh có đồ thị (mới)
+
+**Phát hiện bằng test thật của người dùng** — chạy `npm run dev` thật, quét
+file PDF thật (`4 (1).pdf`, đề có đồ thị hàm số) bằng Gemini thật → báo lỗi
+"Có block với định dạng không hợp lệ trong dữ liệu AI trả về."
+
+**Nguyên nhân:** `validateBlocks()` trong `utils/geminiClient.ts` có danh
+sách `allowedTypes` (whitelist) để kiểm tra từng block Gemini trả về có hợp
+lệ không, trước khi cho vào state. Danh sách này được viết TRƯỚC khi tính
+năng chèn hình vẽ (`"image"` block, xem mục 2/14) được thêm vào, và không
+được cập nhật theo — thiếu đúng `"image"` trong whitelist. Mọi nơi khác
+trong code (`BlockEditor.tsx`, `docxGenerator.ts`, `pdfGenerator.ts`) đều đã
+xử lý `case "image"` đầy đủ, chỉ riêng whitelist này bị bỏ sót. Kết quả:
+Gemini trả JSON đúng và có ích (đúng như thiết kế — trả `bbox` cho đồ thị),
+nhưng bị chính app tự chặn ở bước validate trước khi kịp cắt ảnh.
+
+**Đã sửa:** thêm `"image"` vào `allowedTypes` trong `validateBlocks()`
+(`utils/geminiClient.ts`). Một dòng, không cần đổi gì khác.
+
+**Ý nghĩa:** đây là bằng chứng đầu tiên rằng Gemini thật (không phải JSON tự
+viết tay mô phỏng) trả bbox cho đồ thị đúng theo rule 14 — vấn đề duy nhất
+là app tự chặn, không phải Gemini trả sai. Vẫn cần test lại từ đầu (`npm run
+dev`, quét lại đúng file `4 (1).pdf` này) để xác nhận: (a) lỗi hết hẳn, (b)
+đồ thị được cắt và chèn đúng vị trí, (c) format công thức/toán trong đề vẫn
+đúng.
+

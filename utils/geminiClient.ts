@@ -58,6 +58,7 @@ function validateBlocks(blocks: unknown): DocumentBlock[] {
     "signature_row",
     "spacer",
     "page_break",
+    "image",
   ]);
   for (const b of blocks) {
     if (!b || typeof b !== "object" || !allowedTypes.has((b as any).type)) {
