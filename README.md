@@ -459,3 +459,53 @@ sửa rule 14 trong `geminiPrompt.ts` một cách có căn cứ — cần thêm 
 thật (vài lần quét nữa, đặc biệt các trang có NHIỀU hình xếp chồng theo
 chiều dọc như trang này) mới đủ để tinh chỉnh prompt cho đúng hướng.
 
+## 20. Nâng cấp mục 19: tự phục hồi thay vì chỉ bỏ cuộc (mới)
+
+**Bối cảnh:** người dùng quét lại đúng file `4 (1).pdf` sau bản vá mục 19 —
+không còn ảnh trắng lọt vào file nữa (đúng như kỳ vọng), nhưng đồ thị thứ 2
+vẫn bị THIẾU HẲN, chỉ còn `[Hình minh họa]` — tức mục 19 chỉ "chữa cháy"
+(ẩn cái sai) chứ chưa thật sự lấy được hình đúng. Lỗi lặp lại y hệt ở lần
+quét thứ 2 trên cùng 1 file → bbox của Gemini cho hình thứ 2 (khi có 2 hình
+xếp chồng dọc trên cùng trang) lệch có tính hệ thống, không phải nhiễu ngẫu
+nhiên.
+
+**Hướng sửa:** vì không gọi được Gemini thật trong sandbox để sửa tận gốc
+bằng cách chỉnh prompt (mục 19 đã nêu), chuyển sang làm cho bước CẮT ẢNH tự
+phục hồi: khi vùng cắt đúng bbox bị trắng, thay vì bỏ cuộc ngay, MỞ RỘNG
+vùng cắt quanh đúng tâm bbox cũ (giữ nguyên phỏng đoán "khoảng nào" của
+Gemini, chỉ nới rộng biên) và thử lại, tăng dần hệ số `[1, 1.6, 2.2, 3]`,
+dừng ở lần đầu tiên không còn trắng. Chỉ khi mở rộng hết cỡ vẫn trắng mới
+thật sự rơi về fallback chữ như mục 19.
+
+**Đã kiểm chứng bằng dữ liệu thật** (không đoán): dựng lại CHÍNH XÁC logic
+`isCropBlank`/`expandBbox`/vòng lặp mở rộng bằng Node + package `canvas`
+(thay cho `<canvas>` trình duyệt), chạy trực tiếp trên ảnh trang PDF gốc đã
+render (`4 (1).pdf` → JPG 150dpi). Giả lập đúng kiểu lỗi đã quan sát được
+(bbox cùng kích thước, đúng cột ngang chứa đồ thị, nhưng lệch xuống vùng
+trắng dưới đáy khung nội dung — khớp với việc ảnh xuất ra trắng tuyệt đối
+std=0 mà người dùng gặp phải):
+```
+factor=1   bbox={x:0.20, y:0.49, w:0.55, h:0.09}  → blank=true   (khớp lỗi thật)
+factor=1.6 bbox={x:0.035,y:0.463,w:0.88, h:0.144} → blank=false  (phục hồi được)
+```
+→ Ngay ở lần mở rộng đầu tiên (1.6×) đã lấy lại được vùng có nội dung thật
+(đường cong đồ thị), xác nhận bằng cách lưu file PNG kết quả và xem trực
+tiếp — đúng là đồ thị, không phải vùng chữ hay hình còn lại.
+
+**Code:** `utils/imageCrop.ts` — `cropCanvasRegion()` giờ trả về cả
+`blank: boolean` thay vì tự ném lỗi; `expandBbox()` (mới) nới bbox quanh
+tâm, giới hạn trong [0,1]; `cropWithBlankRecovery()` (mới) là vòng lặp thử
+theo `BLANK_RECOVERY_FACTORS`, chỉ ném lỗi (→ fallback chữ) khi mọi mức mở
+rộng đều trắng.
+
+**Lưu ý trung thực (vẫn còn):**
+- Đây VẪN là fix ở lớp phòng thủ/phục hồi, không sửa được nguyên nhân gốc
+  (vì sao Gemini ước lượng lệch cho hình thứ 2 khi có nhiều hình xếp chồng).
+  Nếu bbox lệch quá xa (ngoài phạm vi mở rộng tối đa ×3) thì vẫn thất bại
+  như cũ.
+- Mở rộng bbox có đánh đổi: ở hệ số cao (×2.2, ×3), vùng cắt có thể lớn hơn
+  cần thiết, lỡ "ăn" luôn chữ/hình bên cạnh nếu 2 hình rất sát nhau. Chấp
+  nhận đánh đổi này vì tốt hơn hẳn so với mất trắng hoàn toàn.
+- Vẫn cần quét lại đúng file này lần nữa để xác nhận trên đường dẫn thật
+  (Gemini → cropImageBlocks → docx), không chỉ qua mô phỏng Node như trên.
+
