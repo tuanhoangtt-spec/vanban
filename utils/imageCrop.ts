@@ -89,19 +89,68 @@ function loadImageFile(file: File): Promise<HTMLImageElement> {
 // pixel) keeps this fast even on larger crops.
 const BLANK_CROP_STD_THRESHOLD = 2.5;
 
-function isCropBlank(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
-  const step = Math.max(1, Math.floor(Math.min(width, height) / 64)); // ~64x64 sample grid max
+// A crop is considered "clipped" when its actual ink content runs edge-to-
+// edge on an axis (near-zero margin on BOTH sides of that axis) — found via
+// real testing on a *different* file (a page with two stacked multiple-
+// choice graphs): the bbox for the second graph was not blank, it had real
+// pixels, but was badly undersized on one axis, slicing straight through
+// the figure. Reconstructing the actual bbox Gemini used (by comparing the
+// exported crop's pixel dimensions against the source image's true
+// dimensions) showed both graphs on that page were given the exact same
+// bbox HEIGHT fraction (~0.18) regardless of their very different true
+// sizes — evidence the model was reusing a rough template rather than
+// measuring each figure. Because rule 14 already tells Gemini to err
+// generous (pad the box rather than cut it tight), *any* crop whose content
+// touches both edges of an axis with ~zero margin contradicts that
+// instruction and is a reliable signal the box was too tight on that axis,
+// independent of whether it's also blank.
+const INK_LUMINANCE_THRESHOLD = 200;
+const EDGE_TOUCH_MARGIN_FRACTION = 0.03;
+
+interface CropContentAnalysis {
+  blank: boolean;
+  /** true if ink runs edge-to-edge (near-zero margin both sides) on the X or Y axis */
+  clipped: boolean;
+}
+
+function analyzeCropContent(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): CropContentAnalysis {
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 80)); // up to ~80x80 sample grid
   const samples: number[] = [];
+  let minXFrac = 1;
+  let maxXFrac = 0;
+  let minYFrac = 1;
+  let maxYFrac = 0;
+  let hasInk = false;
+
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
       const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
-      samples.push(0.299 * r + 0.587 * g + 0.114 * b); // perceptual luminance
+      const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+      samples.push(luminance);
+      if (luminance < INK_LUMINANCE_THRESHOLD) {
+        hasInk = true;
+        minXFrac = Math.min(minXFrac, x / width);
+        maxXFrac = Math.max(maxXFrac, x / width);
+        minYFrac = Math.min(minYFrac, y / height);
+        maxYFrac = Math.max(maxYFrac, y / height);
+      }
     }
   }
-  if (samples.length < 4) return false; // too small to judge reliably, don't block it
+
+  if (samples.length < 4) return { blank: false, clipped: false }; // too small to judge, don't block it
+
   const mean = samples.reduce((a, v) => a + v, 0) / samples.length;
   const variance = samples.reduce((a, v) => a + (v - mean) ** 2, 0) / samples.length;
-  return Math.sqrt(variance) < BLANK_CROP_STD_THRESHOLD;
+  const blank = Math.sqrt(variance) < BLANK_CROP_STD_THRESHOLD;
+  if (blank || !hasInk) return { blank: true, clipped: false };
+
+  const touchesX = minXFrac < EDGE_TOUCH_MARGIN_FRACTION && 1 - maxXFrac < EDGE_TOUCH_MARGIN_FRACTION;
+  const touchesY = minYFrac < EDGE_TOUCH_MARGIN_FRACTION && 1 - maxYFrac < EDGE_TOUCH_MARGIN_FRACTION;
+  return { blank: false, clipped: touchesX || touchesY };
 }
 
 function cropCanvasRegion(
@@ -109,7 +158,7 @@ function cropCanvasRegion(
   sourceWidth: number,
   sourceHeight: number,
   bbox: ImageBlock["bbox"]
-): { dataUrl: string; blank: boolean } {
+): { dataUrl: string; analysis: CropContentAnalysis } {
   const sx = Math.max(0, bbox.x) * sourceWidth;
   const sy = Math.max(0, bbox.y) * sourceHeight;
   const sw = Math.min(1 - Math.max(0, bbox.x), bbox.width) * sourceWidth;
@@ -121,13 +170,13 @@ function cropCanvasRegion(
   const ctx = out.getContext("2d");
   if (!ctx) throw new Error("Không tạo được canvas để cắt hình minh họa.");
   ctx.drawImage(source, sx, sy, sw, sh, 0, 0, out.width, out.height);
-  return { dataUrl: out.toDataURL("image/png"), blank: isCropBlank(ctx, out.width, out.height) };
+  return { dataUrl: out.toDataURL("image/png"), analysis: analyzeCropContent(ctx, out.width, out.height) };
 }
 
 // Grows a bbox around its own center, clamped to stay inside the page
-// (0..1). Used to recover from a blank crop: keep the model's estimate of
-// *where roughly* the figure is, but widen the net in case the exact
-// coordinates were a bit off.
+// (0..1). Used to recover from a blank or clipped crop: keep the model's
+// estimate of *where roughly* the figure is, but widen the net in case the
+// exact coordinates or size were off.
 function expandBbox(bbox: ImageBlock["bbox"], factor: number): ImageBlock["bbox"] {
   const cx = bbox.x + bbox.width / 2;
   const cy = bbox.y + bbox.height / 2;
@@ -138,31 +187,32 @@ function expandBbox(bbox: ImageBlock["bbox"], factor: number): ImageBlock["bbox"
   return { x, y, width: w, height: h };
 }
 
-// Found via real testing: on a page with two stacked diagrams, Gemini's
-// bbox for the second one landed squarely on blank page background below
-// the actual figure — same failure, reproducibly, across repeat scans of
-// the same file. The exact crop wasn't recoverable by asking the model
-// again, but the true figure was always just outside the guessed box.
-//
-// So instead of giving up on the first blank result, grow the crop around
-// the SAME center a few times before falling back to a text placeholder.
-// Verified against the real source page for this exact failure: a
-// simulated off-by-~6%-of-page-height bbox (pure white, std ≈ 0) recovers
-// real figure content (std jumps to ~24, far above BLANK_CROP_STD_THRESHOLD)
-// already at the very first expansion (1.6x) — see README section 20.
-const BLANK_RECOVERY_FACTORS = [1, 1.6, 2.2, 3];
+// Same expansion ladder covers both failure modes found via real testing:
+// blank (bbox missed the figure entirely, see README §19-20) and clipped
+// (bbox found the figure but sliced through it, see README §21). Both were
+// observed specifically on the SECOND of two figures stacked vertically on
+// one page, across two unrelated source files — reproducible enough to
+// treat as a systematic model tendency, not one-off noise.
+const RECOVERY_FACTORS = [1, 1.6, 2.2, 3];
 
-function cropWithBlankRecovery(
+function cropWithRecovery(
   source: HTMLCanvasElement | HTMLImageElement,
   sourceWidth: number,
   sourceHeight: number,
   bbox: ImageBlock["bbox"]
 ): string {
-  for (const factor of BLANK_RECOVERY_FACTORS) {
+  let bestClippedFallback: string | null = null;
+  for (const factor of RECOVERY_FACTORS) {
     const tryBbox = factor === 1 ? bbox : expandBbox(bbox, factor);
-    const { dataUrl, blank } = cropCanvasRegion(source, sourceWidth, sourceHeight, tryBbox);
-    if (!blank) return dataUrl;
+    const { dataUrl, analysis } = cropCanvasRegion(source, sourceWidth, sourceHeight, tryBbox);
+    if (analysis.blank) continue; // keep expanding, hoping to land on real content
+    if (!analysis.clipped) return dataUrl; // clean, non-blank, margins on all sides — done
+    // Non-blank but still edge-touching: better than nothing, but keep
+    // trying wider in case a bigger box clears the edges entirely. Remember
+    // the largest attempt so far as a fallback in case nothing ever clears.
+    bestClippedFallback = dataUrl;
   }
+  if (bestClippedFallback) return bestClippedFallback;
   // Every attempt, including the widest, came back blank — this genuinely
   // looks like empty page space rather than a slightly-off bbox. Don't
   // return a blank image; let the caller fall back to the text placeholder.
@@ -212,7 +262,7 @@ export async function cropImageBlocks(file: File, doc: ParsedDocument): Promise<
     }
     try {
       const { source, width, height } = await getCropSource(block.page ?? 1);
-      const dataUrl = cropWithBlankRecovery(source, width, height, block.bbox);
+      const dataUrl = cropWithRecovery(source, width, height, block.bbox);
       newBlocks.push({ ...block, dataUrl });
     } catch (err) {
       // Cropping failure (corrupt bbox, unreadable page...) shouldn't break

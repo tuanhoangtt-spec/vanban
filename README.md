@@ -509,3 +509,76 @@ rộng đều trắng.
 - Vẫn cần quét lại đúng file này lần nữa để xác nhận trên đường dẫn thật
   (Gemini → cropImageBlocks → docx), không chỉ qua mô phỏng Node như trên.
 
+## 21. Sửa lỗi: hình đồ thị bị cắt hụt/méo tỉ lệ (không trắng, nhưng sai) (mới)
+
+**Bối cảnh:** file test khác (`Untitled.jpg` — 2 câu trắc nghiệm, mỗi câu 1
+đồ thị bậc 3, xuất ra `Untitled.pdf`) — người dùng báo "vẫn thấy sai". Đồ
+thị của Câu 2 (hình thứ 2 trong 2 hình xếp chồng dọc — **giống hệt mẫu lỗi ở
+mục 19/20**, nhưng đây là file hoàn toàn khác) bị cắt hụt/méo, không hiển
+thị đủ đường cong.
+
+**Vì sao mục 19/20 không bắt được lỗi này:** ảnh xuất ra KHÔNG trắng (có
+điểm ảnh thật, `std` bình thường) nên `isCropBlank`/`cropWithBlankRecovery`
+không kích hoạt. Đây là dạng lỗi khác: bbox không sai vị trí, mà sai KÍCH
+THƯỚC (quá chật), cắt xuyên qua hình thay vì trọn vẹn hình.
+
+**Điều tra bằng dữ liệu thật** (đọc trực tiếp ảnh nhúng trong `Untitled.pdf`
+bằng `pdfimages`/PyMuPDF, đối chiếu với `Untitled.jpg` gốc):
+- Đo tỉ lệ khung hình vùng nội dung thật (bám sát pixel có mực) của từng đồ
+  thị trên ảnh gốc: đồ thị 1 ≈ 1.83, đồ thị 2 ≈ 1.40.
+- Đo tỉ lệ khung hình ảnh THỰC TẾ đã nhúng vào PDF: đồ thị 1 = 452×149
+  (≈3.03), đồ thị 2 = 361×149 (≈2.42) — cả hai đều lệch xa tỉ lệ thật, đồ
+  thị 2 lệch nặng hơn hẳn.
+- Suy ngược ra tỉ lệ bbox (0..1) Gemini đã dùng: `height ≈ 0.180` cho CẢ
+  HAI đồ thị — dù kích thước thật của 2 đồ thị trên trang khác nhau rõ rệt.
+  Đây là bằng chứng khá rõ: Gemini có xu hướng dùng lại một chiều cao "mẫu"
+  áng chừng thay vì đo riêng từng hình, đặc biệt với hình thứ 2 trở đi khi
+  có nhiều hình tương tự xếp chồng trên cùng trang.
+
+**Đã sửa** (`utils/imageCrop.ts`) — thêm phát hiện dạng lỗi thứ hai bên
+cạnh "trắng tinh": **"chạm mép"** — nếu vùng có mực (ink) trong ảnh đã cắt
+áp sát CẢ HAI biên của một trục (trái+phải, hoặc trên+dưới) gần như không
+còn lề, coi là dấu hiệu bbox quá chật (vì rule 14 vốn đã dặn Gemini ước
+lượng RỘNG RÃI — một bbox đúng theo tinh thần đó không bao giờ để nội dung
+chạm sát mép cả hai phía). Gộp chung với cơ chế mở rộng bbox có sẵn ở mục
+20 (`cropWithRecovery()`, đổi tên từ `cropWithBlankRecovery()`): thử lần
+lượt các hệ số mở rộng `[1, 1.6, 2.2, 3]`, dừng ở lần đầu tiên vừa không
+trắng vừa không chạm mép; nếu không có lần nào "sạch" hoàn toàn, dùng bản
+mở rộng nhất còn có nội dung thật (thà ảnh hơi thừa lề còn hơn ảnh cắt cụt);
+chỉ thật sự bỏ cuộc (fallback chữ) khi MỌI lần thử đều trắng.
+
+**Đã kiểm chứng bằng dữ liệu thật** (dựng lại đúng logic TypeScript bằng
+Node + package `canvas`, chạy trực tiếp trên `Untitled.jpg` gốc):
+```
+Đồ thị 2 (hỏng): factor=1   → clipped=true  (minY=0, maxY=0.99 — chạm cả 2 mép trên/dưới, khớp lỗi thật)
+                 factor=1.6 → clipped=false (phục hồi, kích thước 578×238)
+Đồ thị 1 (đã ổn): factor=1   → clipped=false (giữ nguyên 452×149, KHÔNG bị mở rộng thừa)
+```
+→ Xác nhận hai điều quan trọng: (1) cơ chế mới bắt đúng và phục hồi được
+đúng trường hợp lỗi thật; (2) không "sửa nhầm" trường hợp vốn đã ổn — đồ
+thị 1 giữ nguyên kích thước gốc vì không bị coi là chạm mép, tránh mở rộng
+lãng phí/không cần thiết.
+
+**Lưu ý trung thực:**
+- Đây vẫn là fix ở lớp phục hồi (client-side), không sửa được nguyên nhân
+  gốc trong cách Gemini ước lượng bbox. Insight về "dùng chung height ≈0.18
+  cho nhiều hình khác nhau" rất đáng để đưa vào rule 14 của
+  `geminiPrompt.ts` (dặn rõ: đo riêng từng hình, không dùng lại kích thước
+  của hình trước) — CHƯA làm việc này vì cần thêm vài mẫu thật nữa để chắc
+  chắn đây là xu hướng chung chứ không phải trùng hợp của riêng 2 file đã
+  test.
+- Ngưỡng "chạm mép" (`EDGE_TOUCH_MARGIN_FRACTION = 0.03`) và bậc thang mở
+  rộng dùng chung với mục 20, chưa được tinh chỉnh riêng cho dạng lỗi này —
+  hợp lý theo dữ liệu đã có, nhưng vẫn cần thêm test thật để xác nhận không
+  quá nhạy (dương tính giả) hoặc chưa đủ nhạy trên các trang khác.
+- **Đính chính:** phần chat hiển thị nội dung `Untitled.pdf` cho tôi xem có
+  kèm một dòng chữ to bất thường, lặp lại một phần câu hỏi
+  ("y = f(x) có đồ thị như hình vẽ bên. Giá t / bằng:") trước ảnh Câu 2.
+  Đã kiểm tra bằng cách đọc trực tiếp font-size từng đoạn chữ trong chính
+  file `Untitled.pdf` (qua PyMuPDF) — KHÔNG tìm thấy đoạn chữ to/lặp nào,
+  mọi cỡ chữ đều bình thường (12-16pt, đúng như thiết kế). Nhiều khả năng
+  đó là lỗi hiển thị của công cụ chuyển đổi PDF sang văn bản khi đưa file
+  vào cuộc trò chuyện này để tôi đọc, KHÔNG PHẢI lỗi thật trong file PDF
+  bạn có. Bạn có thể tự mở file PDF gốc để xác nhận lại xem có thấy dòng
+  chữ to đó không — nếu không thấy thì đúng như suy đoán ở trên.
+
