@@ -58,6 +58,51 @@ async function renderPdfPageToCanvas(file: File, pageNumber: number): Promise<HT
   return canvas;
 }
 
+// Page orientation is deliberately NOT something we ask Gemini for: it's
+// determined straight from the geometry of the actual uploaded file, which
+// is both more reliable and free (no extra model round-trip). This is a
+// single, document-level value — see the "orientation" field on
+// ParsedDocument — not a per-page one. Real Vietnamese exam/form documents
+// are essentially always uniformly one orientation throughout; supporting
+// genuinely mixed portrait+landscape pages within a single export would
+// require multi-section .docx output and a per-page jsPDF format, which is
+// a lot of added complexity for a case that hasn't been observed in
+// practice. If that turns out to be needed later, this is the function to
+// extend (return an array indexed by page instead of one value).
+export async function detectDocumentOrientation(file: File): Promise<"portrait" | "landscape"> {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+  if (isPdf) {
+    try {
+      const pdfjs = await getPdfjs();
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: buf }).promise;
+      let landscapeVotes = 0;
+      let portraitVotes = 0;
+      // Majority vote across pages (cheap: viewport only, no rendering) in
+      // case a handful of pages are rotated/scanned oddly but most aren't.
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const { width, height } = page.getViewport({ scale: 1 });
+        if (width > height) landscapeVotes++;
+        else portraitVotes++;
+      }
+      return landscapeVotes > portraitVotes ? "landscape" : "portrait";
+    } catch (err) {
+      console.error("Không xác định được khổ giấy của PDF, dùng mặc định dọc:", err);
+      return "portrait";
+    }
+  }
+
+  try {
+    const img = await loadImageFile(file);
+    return img.naturalWidth > img.naturalHeight ? "landscape" : "portrait";
+  } catch (err) {
+    console.error("Không xác định được khổ giấy của ảnh, dùng mặc định dọc:", err);
+    return "portrait";
+  }
+}
+
 function loadImageFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);

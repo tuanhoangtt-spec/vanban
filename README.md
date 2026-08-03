@@ -582,3 +582,109 @@ lãng phí/không cần thiết.
   bạn có. Bạn có thể tự mở file PDF gốc để xác nhận lại xem có thấy dòng
   chữ to đó không — nếu không thấy thì đúng như suy đoán ở trên.
 
+
+---
+
+## Phiên tiếp theo: khổ giấy ngang + siết lại rule 14 (chưa test qua Gemini/browser thật)
+
+Người dùng báo 2 điều sau khi thử nghiệm thêm: (1) tool vẫn luôn xuất ra khổ
+dọc dù văn bản gốc là ngang; (2) gửi kèm 2 file PDF ví dụ để minh hoạ đồ thị
+"vẫn chưa hoàn hảo". Đã điều tra và sửa mục (1); mục (2) cần làm rõ thêm
+trước khi sửa tiếp — xem phần "Chưa giải quyết" bên dưới.
+
+### Mục 22 — Không có khái niệm khổ giấy ngang/dọc ở bất kỳ đâu trong pipeline
+
+**Xác nhận bằng cách đọc trực tiếp code:** `pdfGenerator.ts` hardcode
+`orientation: "portrait"` khi khởi tạo `jsPDF`; `docxGenerator.ts` hardcode
+`PAGE_WIDTH_DXA`/`PAGE_HEIGHT_DXA` theo A4 dọc cố định trong `section.page.size`.
+Không có field "orientation" nào trong `ParsedDocument`, trong schema JSON
+Gemini phải trả về (`geminiPrompt.ts`), hay bất kỳ đâu khác — đây không phải
+lỗi mới phát sinh mà là tính năng chưa từng được làm ở các phiên trước.
+
+**Đã sửa (mức tài liệu — một hướng giấy cho toàn bộ file xuất ra, CHƯA hỗ
+trợ trộn dọc/ngang trong cùng một file):**
+1. Thêm `detectDocumentOrientation(file)` trong `imageCrop.ts` — xác định
+   hướng giấy từ chính KÍCH THƯỚC TRANG THẬT của file người dùng tải lên,
+   KHÔNG hỏi Gemini (đáng tin hơn, không tốn thêm lượt gọi model):
+   - PDF: dùng `pdfjs` lấy `viewport` (width/height) của từng trang — chỉ đo
+     kích thước, không render — rồi lấy theo đa số phiếu (width>height ⇒
+     landscape) trên toàn bộ số trang, phòng trường hợp một vài trang bị
+     lệch/scan sai mà đa số trang vẫn đúng hướng.
+   - Ảnh: dùng `naturalWidth`/`naturalHeight` của chính ảnh.
+2. Gắn kết quả vào field mới `ParsedDocument.orientation` (`types/index.ts`),
+   set ngay sau khi Gemini quét xong, trước bước cắt hình (`app/page.tsx`).
+3. `docxGenerator.ts`: hoán đổi width/height A4 và set
+   `PageOrientation.LANDSCAPE`/`PORTRAIT` tương ứng trong `section.page.size`.
+4. `pdfGenerator.ts`: đổi các hằng khổ trang (`PAGE_WIDTH_MM`,
+   `PAGE_HEIGHT_MM`, `CONTENT_WIDTH_MM`, `CONTENT_BOTTOM_MM`) từ `const`
+   sang `let`, gán lại đúng 1 lần ở đầu `buildPdf()` dựa trên
+   `document.orientation`, TRƯỚC khi vẽ bất kỳ block nào. Vì mọi hàm vẽ
+   (`drawParagraph`, `drawTable`, `drawImage`...) đọc các hằng này qua
+   closure ở thời điểm gọi (không phải thời điểm định nghĩa), chỉ cần gán
+   lại 1 chỗ duy nhất là toàn bộ các hàm vẽ tự động ăn theo — không cần sửa
+   từng hàm hay truyền thêm tham số layout xuyên suốt. `doc.addPage()` cũng
+   được sửa để truyền tường minh `("a4", "landscape"|"portrait")` thay vì
+   gọi không tham số, tránh việc trang tiếp theo (sau `page_break` hoặc
+   tràn nội dung) âm thầm quay lại portrait mặc định của jsPDF.
+
+**Giới hạn còn lại (nói rõ để không hiểu nhầm là đã xong hoàn toàn):**
+- Đây là hướng giấy MỨC TÀI LIỆU (1 giá trị cho cả file), không phải mức
+  từng trang. Nếu một PDF có, ví dụ, trang 1-5 dọc và trang 6 duy nhất
+  ngang (một bảng lớn xoay ngang xen giữa văn bản dọc), hiện tại cả file
+  vẫn ra 1 hướng theo đa số phiếu — trang thiểu số sẽ bị ép sai hướng.
+  Hỗ trợ trộn hướng thật sự cần: `docx` phải tách nhiều `sections` (mỗi
+  đoạn giữa hai `page_break` một section với `page.size` riêng) và jsPDF
+  phải gọi `addPage(format, orientation)` khác nhau tại từng lần ngắt
+  trang thay vì 1 giá trị cố định — chưa làm vì (a) chưa có bằng chứng thực
+  tế văn bản hành chính/đề thi tiếng Việt hay bị trộn hướng giữa chừng,
+  (b) độ phức tạp thêm vào không nhỏ. Nếu người dùng gặp trường hợp trộn
+  hướng thật, đây là hướng để mở rộng tiếp.
+- **CHƯA test qua Gemini thật + browser thật** — chỉ mới qua `tsc --noEmit`
+  (0 lỗi) và `npm run build` (build sạch, đã tạm thay `next/font/google`
+  bằng font hệ thống để cô lập lỗi mạng của sandbox rồi khôi phục nguyên
+  trạng ngay sau, không phải thay đổi chính thức). Cần người dùng tự quét
+  thử một file khổ ngang thật để xác nhận trang xuất ra đúng là landscape.
+
+### Mục 23 — Siết lại rule 14 trong `geminiPrompt.ts` (bbox hình vẽ)
+
+Đây là việc còn mở ghi ở cuối phiên trước: bằng chứng từ 2 file test độc
+lập (mục 19-21) cho thấy Gemini có xu hướng dùng lại một "kích thước mẫu"
+áng chừng cho hình thứ 2 trở đi khi nhiều hình xếp chồng dọc trên cùng
+trang, thay vì đo riêng từng hình. Các fix mục 19-21 trước đó đều là lớp
+PHỤC HỒI ở client (phát hiện + mở rộng bbox khi cắt hỏng), chưa sửa ở gốc.
+
+**Đã sửa:** thêm đoạn hướng dẫn tường minh vào rule 14, ngay sau câu "Ước
+lượng bbox rộng rãi hơn một chút..." — dặn rõ: khi một trang có từ 2 hình
+trở lên, phải đo riêng bbox cho TỪNG hình dựa trên ranh giới thật của chính
+nó, và CẤM dùng lại width/height đã ước lượng cho hình trước nếu hình sau
+khác biệt rõ rệt về kích thước trong ảnh gốc.
+
+**Giới hạn:** đây là thay đổi PROMPT, tác động của nó lên hành vi thật của
+Gemini hoàn toàn chưa đo được (sandbox không gọi được Gemini API). Không
+thay thế 2 lớp phục hồi mục 19-21 — vẫn giữ nguyên cả hai, vì kể cả khi
+prompt cải thiện, phục hồi ở client vẫn là lưới an toàn cần thiết cho các
+lần lỡ tay còn sót. Cần người dùng test thật trên vài file có nhiều hình
+xếp chồng để xem tần suất bbox sai có giảm rõ rệt hay không.
+
+### Chưa giải quyết — cần làm rõ thêm: "hình học/đồ thị chưa hoàn hảo"
+
+Người dùng gửi kèm 2 file PDF làm ví dụ. Phân tích trực tiếp bằng PyMuPDF:
+- File 12 trang (bản đề gốc, có 4 ảnh logo lặp lại y hệt trên mọi trang) —
+  đây là FILE GỐC chưa qua app, dùng để đối chiếu, không phải output.
+- File 1 trang còn lại: **0 ảnh raster nhúng**, chỉ có 55 nét vẽ vector,
+  đồ thị được vẽ bằng vector rất sạch (trục, nhãn, nét cong đều là path).
+
+Vấn đề: `pdfGenerator.ts` hiện tại CHỈ vẽ block "image" bằng
+`doc.addImage(...)` — tức luôn là PNG raster cắt từ canvas, KHÔNG BAO GIỜ tự
+vẽ vector. Một file có đồ thị thuần vector, không một ảnh raster nào, không
+khớp với cách app hiện tại tạo ra file — nhiều khả năng đây là bản gốc/tham
+chiếu "chuẩn" trước khi bị scan/chụp lại thành bản lộn xộn (file 12 trang),
+chứ không phải output thật sự của app qua Gemini.
+
+**Đã hỏi lại người dùng** để xin đúng file .docx/.pdf do chính app xuất ra
+(sau khi quét file gốc 12 trang bằng Gemini thật) hoặc mô tả cụ thể hơn chỗ
+"chưa hoàn hảo" (lệch vị trí? méo tỉ lệ? thiếu nhãn trục? mất nét?) — CHƯA
+nhận được phản hồi/file mới tại thời điểm này nên chưa thể chẩn đoán tiếp.
+Mục 23 ở trên (siết rule 14) là bước chủ động làm trước dựa trên bằng chứng
+đã có sẵn từ phiên trước, nhưng có thể không phải đúng nguyên nhân của vấn
+đề người dùng đang thấy ở 2 file mới này — cần xác nhận lại khi có dữ liệu.

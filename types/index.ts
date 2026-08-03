@@ -117,6 +117,13 @@ export type DocumentBlock =
 
 export type ParsedDocument = {
   blocks: DocumentBlock[];
+  // Detected client-side from the actual uploaded file's page geometry (see
+  // utils/imageCrop.ts:detectDocumentOrientation) — NOT part of Gemini's
+  // JSON schema, and NOT per-page. Both docxGenerator.ts and pdfGenerator.ts
+  // read this to pick A4 portrait vs. A4 landscape for the whole export.
+  // Defaults to "portrait" when absent (e.g. results loaded from an older
+  // save that predates this field).
+  orientation?: "portrait" | "landscape";
 };
 
 export type ScanStatus = "idle" | "uploading" | "processing" | "done" | "error";

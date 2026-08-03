@@ -6,7 +6,7 @@ import { ApiKeyManager, useApiKeyPool } from "@/components/ApiKeyManager";
 import { UploadZone } from "@/components/UploadZone";
 import { DocumentCard } from "@/components/DocumentCard";
 import { scanImageWithKeyPool, GeminiError } from "@/utils/geminiClient";
-import { cropImageBlocks } from "@/utils/imageCrop";
+import { cropImageBlocks, detectDocumentOrientation } from "@/utils/imageCrop";
 import type { ParsedDocument, UploadedImage } from "@/types";
 
 function uid() {
@@ -42,10 +42,13 @@ export default function Home() {
         target.file
       );
       setKeys(updatedKeys); // persist exhaustion/usage bookkeeping
+      // Orientation comes from the actual uploaded file's page geometry, not
+      // from Gemini — see detectDocumentOrientation for why.
+      const orientation = await detectDocumentOrientation(target.file);
       // Gemini only returns bounding boxes for graphic regions (rule 14) —
       // the actual pixels are cropped client-side from the file the user
       // uploaded, since Gemini never sends image bytes back.
-      const withImages = await cropImageBlocks(target.file, document);
+      const withImages = await cropImageBlocks(target.file, { ...document, orientation });
       updateImage(id, { status: "done", result: withImages, usedKeyLabel: usedKey.label });
     } catch (err) {
       // Even on failure, key exhaustion flags set during rotation attempts

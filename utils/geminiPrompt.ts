@@ -58,6 +58,15 @@ QUY TẮC ĐỌC:
       { "x": <tỉ lệ từ mép trái>, "y": <tỉ lệ từ mép trên>,
         "width": <tỉ lệ chiều rộng hình>, "height": <tỉ lệ chiều cao hình> }
       Ước lượng bbox rộng rãi hơn một chút thà thừa còn hơn cắt mất một phần hình.
+      QUAN TRỌNG khi một trang có TỪ HAI hình trở lên (ví dụ nhiều câu trắc nghiệm
+      liên tiếp, mỗi câu kèm một đồ thị, xếp chồng theo chiều dọc): đo riêng bbox
+      cho TỪNG hình một cách ĐỘC LẬP, dựa trên kích thước thật của chính hình đó
+      trong ảnh — TUYỆT ĐỐI KHÔNG dùng lại cùng một "height" hay "width" đã ước
+      lượng cho hình trước đó nếu hình sau lớn/nhỏ hơn rõ rệt trong ảnh gốc. Mỗi
+      hình có thể có kích thước và tỉ lệ khung hình khác nhau hoàn toàn dù cùng
+      xuất hiện trên một trang — nhìn kỹ ranh giới thật của từng hình (từ nét vẽ
+      trên cùng đến nét vẽ dưới cùng, từ mép trái đến mép phải của riêng nó)
+      trước khi ghi bbox, đừng áng chừng theo hình đã làm trước đó.
     - "page": số trang (bắt đầu từ 1) chứa hình đó, áp dụng khi đầu vào là PDF nhiều
       trang. Bỏ qua field này (hoặc để 1) nếu đầu vào chỉ có 1 trang/1 ảnh.
     - "caption" (tuỳ chọn): mô tả ngắn gọn nội dung hình, ví dụ "Đồ thị hàm số y = f(x)".

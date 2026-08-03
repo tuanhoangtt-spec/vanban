@@ -13,6 +13,7 @@ import {
   TabStopType,
   LeaderType,
   PageBreak,
+  PageOrientation,
 } from "docx";
 import { saveAs } from "file-saver";
 import type {
@@ -331,6 +332,13 @@ function blockToDocxElements(block: DocumentBlock): (Paragraph | Table)[] {
 export function buildDocx(doc: ParsedDocument): Document {
   const children = doc.blocks.flatMap(blockToDocxElements);
 
+  // Detected client-side from the source file's own page geometry (see
+  // utils/imageCrop.ts:detectDocumentOrientation) — a single value for the
+  // whole document, not per-page. Landscape just swaps the A4 width/height.
+  const landscape = doc.orientation === "landscape";
+  const pageWidth = landscape ? PAGE_HEIGHT_DXA : PAGE_WIDTH_DXA;
+  const pageHeight = landscape ? PAGE_WIDTH_DXA : PAGE_HEIGHT_DXA;
+
   return new Document({
     styles: {
       default: {
@@ -347,8 +355,9 @@ export function buildDocx(doc: ParsedDocument): Document {
         properties: {
           page: {
             size: {
-              width: PAGE_WIDTH_DXA,
-              height: PAGE_HEIGHT_DXA,
+              width: pageWidth,
+              height: pageHeight,
+              orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
             },
             margin: {
               top: MARGIN_DXA,

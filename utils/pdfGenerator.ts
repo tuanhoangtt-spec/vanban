@@ -15,11 +15,21 @@ import { textWithMathToPlain } from "./mathPlainText";
 
 // Mirrors the fixed office formatting used in docxGenerator.ts, translated
 // to jsPDF's mm/pt units, so the PDF and the Word export read the same way.
-const PAGE_WIDTH_MM = 210; // A4
-const PAGE_HEIGHT_MM = 297;
+//
+// These are `let`, not `const`: buildPdf() reassigns them once at the top,
+// based on document.orientation (detected client-side from the source
+// file's own page geometry — see utils/imageCrop.ts). Every draw* function
+// below reads them at call time (normal JS closure lookup), so setting them
+// before any drawBlock() call is enough to make the whole export landscape
+// — no need to thread a layout object through every function signature.
+// This is a document-level switch, not per-page.
+const A4_SHORT_MM = 210;
+const A4_LONG_MM = 297;
+let PAGE_WIDTH_MM = A4_SHORT_MM; // portrait by default
+let PAGE_HEIGHT_MM = A4_LONG_MM;
 const MARGIN_MM = 20; // 2cm
-const CONTENT_WIDTH_MM = PAGE_WIDTH_MM - MARGIN_MM * 2;
-const CONTENT_BOTTOM_MM = PAGE_HEIGHT_MM - MARGIN_MM;
+let CONTENT_WIDTH_MM = PAGE_WIDTH_MM - MARGIN_MM * 2;
+let CONTENT_BOTTOM_MM = PAGE_HEIGHT_MM - MARGIN_MM;
 
 const FONT_SIZE_PT = 14;
 const HEADING_SIZE_PT = 16;
@@ -47,7 +57,7 @@ class PdfCursor {
 
   ensureSpace(neededMm: number) {
     if (this.y + neededMm > CONTENT_BOTTOM_MM) {
-      this.doc.addPage();
+      this.doc.addPage("a4", PAGE_WIDTH_MM > PAGE_HEIGHT_MM ? "landscape" : "portrait");
       this.y = MARGIN_MM;
     }
   }
@@ -57,7 +67,7 @@ class PdfCursor {
   }
 
   forcePageBreak() {
-    this.doc.addPage();
+    this.doc.addPage("a4", PAGE_WIDTH_MM > PAGE_HEIGHT_MM ? "landscape" : "portrait");
     this.y = MARGIN_MM;
   }
 }
@@ -364,7 +374,13 @@ function drawBlock(doc: jsPDF, cursor: PdfCursor, block: DocumentBlock) {
 }
 
 export async function buildPdf(document: ParsedDocument): Promise<jsPDF> {
-  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const landscape = document.orientation === "landscape";
+  PAGE_WIDTH_MM = landscape ? A4_LONG_MM : A4_SHORT_MM;
+  PAGE_HEIGHT_MM = landscape ? A4_SHORT_MM : A4_LONG_MM;
+  CONTENT_WIDTH_MM = PAGE_WIDTH_MM - MARGIN_MM * 2;
+  CONTENT_BOTTOM_MM = PAGE_HEIGHT_MM - MARGIN_MM;
+
+  const doc = new jsPDF({ unit: "mm", format: "a4", orientation: landscape ? "landscape" : "portrait" });
   await registerPdfFont(doc);
   doc.setFont(PDF_FONT_FAMILY, "normal");
   doc.setFontSize(FONT_SIZE_PT);
