@@ -119,11 +119,132 @@ function classifyError(err: unknown, model?: string): GeminiError {
   return new GeminiError("UNKNOWN", `Lỗi không xác định: ${message}`);
 }
 
+// Transient 503/5xx "model overloaded" errors are common and well-documented
+// on Gemini's own troubleshooting guide, which recommends exponential
+// backoff. Google's own SDKs (Python) retry automatically; the JS/TS
+// @google/genai SDK used here does NOT, so without this the app used to
+// surface a 5xx to the user on the very first hiccup even though a retry a
+// few seconds later usually just works.
+const RETRY_DELAYS_MS = [1000, 2500, 5000]; // 3 retries → 4 attempts total
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function jitter(ms: number): number {
+  // +/-20% jitter so multiple concurrent tabs/users don't all retry in lockstep.
+  return ms * (0.8 + Math.random() * 0.4);
+}
+
 // Gemini's inline request payload has a hard ceiling (base64 inflates bytes
 // ~1.33x); staying comfortably under it avoids opaque failures for big scans
 // or many-page PDFs. Files above this should be split or use the Files API
 // (not implemented here to keep the app fully client-side / serverless).
 const MAX_FILE_SIZE_BYTES = 18 * 1024 * 1024; // ~18MB on disk
+
+/** Runs one generateContent call against one model, returning the raw text or throwing GeminiError. */
+async function generateOnce(
+  ai: GoogleGenAI,
+  model: string,
+  file: File,
+  base64: string
+): Promise<string> {
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: USER_PROMPT },
+          { inlineData: { mimeType: file.type || "image/jpeg", data: base64 } },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION,
+      temperature: 0.1,
+      responseMimeType: "application/json",
+      // Gemini Flash models have "thinking" on by default, and thinking
+      // tokens are deducted from the SAME budget as the visible output.
+      // On dense documents (big tables, lots of handwriting) the model
+      // can burn the entire default budget on internal reasoning and
+      // return an EMPTY response with finishReason "MAX_TOKENS" — no
+      // error, just nothing. Capping the thinking budget and raising
+      // maxOutputTokens generously guarantees room is left for the
+      // actual JSON to be written out.
+      //
+      // Images used to get a smaller budget than PDFs on the assumption
+      // they'd be simpler (e.g. one photographed page). Real-world
+      // testing with a dense government form (CT01 — 84 table cells
+      // across a household-member grid and two digit-box sequences, all
+      // as a single JPG) showed that assumption was wrong: the model
+      // was cut off mid-JSON at 16384 tokens. Images can be just as
+      // content-dense as PDF pages, so both now get the same generous
+      // budget.
+      maxOutputTokens: 32768,
+      thinkingConfig: { thinkingBudget: 4096 },
+    },
+  });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  const text = response.text ?? "";
+
+  // Check finishReason BEFORE looking at whether resultText is empty.
+  // Truncation from hitting maxOutputTokens doesn't always leave an
+  // empty response — it can leave a partial, non-empty chunk of JSON
+  // cut off mid-string/mid-object. That partial text would previously
+  // skip this whole block (since the old check only ran when resultText
+  // was empty) and fall through to a plain JSON.parse() failure below,
+  // surfacing a generic "AI trả về dữ liệu không đúng định dạng JSON"
+  // error that gave no hint about *why* — even though we already knew
+  // exactly why.
+  if (finishReason === "MAX_TOKENS") {
+    throw new GeminiError(
+      "PARSE",
+      "Ảnh/PDF có quá nhiều nội dung khiến AI chưa viết xong phản hồi trong giới hạn token. Vui lòng thử lại, hoặc chụp/crop ảnh thành từng phần nhỏ hơn nếu ảnh có rất nhiều chữ."
+    );
+  }
+  if (finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT") {
+    throw new GeminiError(
+      "PARSE",
+      "Gemini từ chối xử lý ảnh này (bị chặn bởi bộ lọc an toàn nội dung). Vui lòng thử ảnh khác."
+    );
+  }
+  if (!text.trim()) {
+    throw new GeminiError(
+      "PARSE",
+      `AI trả về phản hồi rỗng (finishReason: ${finishReason ?? "không rõ"}). Vui lòng thử quét lại.`
+    );
+  }
+  return text;
+}
+
+/**
+ * Runs generateOnce for one model, automatically retrying with exponential
+ * backoff + jitter if the error is a transient 5xx ("model overloaded").
+ * Any other error (bad key, MAX_TOKENS, safety block, 404...) is NOT
+ * retried here — it's either not transient or handled by the caller's
+ * model-fallback loop.
+ */
+async function generateWithRetry(
+  ai: GoogleGenAI,
+  model: string,
+  file: File,
+  base64: string
+): Promise<string> {
+  let lastErr: GeminiError | null = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await generateOnce(ai, model, file, base64);
+    } catch (err) {
+      const geminiErr = err instanceof GeminiError ? err : classifyError(err, model);
+      if (geminiErr.code !== "NETWORK" || attempt === RETRY_DELAYS_MS.length) {
+        throw geminiErr;
+      }
+      lastErr = geminiErr;
+      await sleep(jitter(RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  // Unreachable, but keeps TypeScript happy about the return type.
+  throw lastErr ?? new GeminiError("NETWORK", "Máy chủ Gemini đang gặp sự cố tạm thời.");
+}
 
 async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
   if (file.size > MAX_FILE_SIZE_BYTES) {
@@ -137,94 +258,38 @@ async function callGemini(apiKey: string, file: File): Promise<ParsedDocument> {
   const base64 = await fileToBase64(file);
 
   let resultText: string | undefined;
+  let lastFallbackError: GeminiError | null = null;
 
-  // Try each candidate model in order. We only move on to the next
-  // candidate when the CURRENT one specifically 404s (model retired /
-  // not available for this key) — any other error (bad key, quota,
-  // network, safety block) is real and should surface immediately rather
-  // than being masked by silently retrying with a different model.
+  // Try each candidate model in order. We move on to the next candidate
+  // when the CURRENT one 404s (model retired / not available for this key)
+  // OR keeps returning 5xx after the retries above are exhausted (that
+  // model's backend may specifically be overloaded while another isn't).
+  // Any other error (bad key, quota, safety block, token limit) is real
+  // and should surface immediately rather than being masked by silently
+  // trying more models.
   for (const model of MODEL_CANDIDATES) {
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: USER_PROMPT },
-              { inlineData: { mimeType: file.type || "image/jpeg", data: base64 } },
-            ],
-          },
-        ],
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          temperature: 0.1,
-          responseMimeType: "application/json",
-          // Gemini Flash models have "thinking" on by default, and thinking
-          // tokens are deducted from the SAME budget as the visible output.
-          // On dense documents (big tables, lots of handwriting) the model
-          // can burn the entire default budget on internal reasoning and
-          // return an EMPTY response with finishReason "MAX_TOKENS" — no
-          // error, just nothing. Capping the thinking budget and raising
-          // maxOutputTokens generously guarantees room is left for the
-          // actual JSON to be written out.
-          //
-          // Images used to get a smaller budget than PDFs on the assumption
-          // they'd be simpler (e.g. one photographed page). Real-world
-          // testing with a dense government form (CT01 — 84 table cells
-          // across a household-member grid and two digit-box sequences, all
-          // as a single JPG) showed that assumption was wrong: the model
-          // was cut off mid-JSON at 16384 tokens. Images can be just as
-          // content-dense as PDF pages, so both now get the same generous
-          // budget.
-          maxOutputTokens: 32768,
-          thinkingConfig: { thinkingBudget: 4096 },
-        },
-      });
-
-      const finishReason = response.candidates?.[0]?.finishReason;
-      const text = response.text ?? "";
-
-      // Check finishReason BEFORE looking at whether resultText is empty.
-      // Truncation from hitting maxOutputTokens doesn't always leave an
-      // empty response — it can leave a partial, non-empty chunk of JSON
-      // cut off mid-string/mid-object. That partial text would previously
-      // skip this whole block (since the old check only ran when resultText
-      // was empty) and fall through to a plain JSON.parse() failure below,
-      // surfacing a generic "AI trả về dữ liệu không đúng định dạng JSON"
-      // error that gave no hint about *why* — even though we already knew
-      // exactly why.
-      if (finishReason === "MAX_TOKENS") {
-        throw new GeminiError(
-          "PARSE",
-          "Ảnh/PDF có quá nhiều nội dung khiến AI chưa viết xong phản hồi trong giới hạn token. Vui lòng thử lại, hoặc chụp/crop ảnh thành từng phần nhỏ hơn nếu ảnh có rất nhiều chữ."
-        );
-      }
-      if (finishReason === "SAFETY" || finishReason === "PROHIBITED_CONTENT") {
-        throw new GeminiError(
-          "PARSE",
-          "Gemini từ chối xử lý ảnh này (bị chặn bởi bộ lọc an toàn nội dung). Vui lòng thử ảnh khác."
-        );
-      }
-      if (!text.trim()) {
-        throw new GeminiError(
-          "PARSE",
-          `AI trả về phản hồi rỗng (finishReason: ${finishReason ?? "không rõ"}). Vui lòng thử quét lại.`
-        );
-      }
-      resultText = text;
+      resultText = await generateWithRetry(ai, model, file, base64);
+      lastFallbackError = null;
       break; // success — stop trying further candidates
     } catch (err) {
       const geminiErr = err instanceof GeminiError ? err : classifyError(err, model);
-      if (geminiErr.code === "MODEL_NOT_FOUND") {
+      if (geminiErr.code === "MODEL_NOT_FOUND" || geminiErr.code === "NETWORK") {
         resultText = undefined;
-        continue; // this model is gone for this key — try the next candidate
+        lastFallbackError = geminiErr;
+        continue; // try the next candidate model
       }
       throw geminiErr;
     }
   }
 
   if (resultText === undefined) {
+    if (lastFallbackError?.code === "NETWORK") {
+      throw new GeminiError(
+        "NETWORK",
+        "Máy chủ Gemini đang quá tải hoặc gặp sự cố tạm thời trên nhiều model liên tiếp (đã tự động thử lại nhiều lần). Vui lòng thử lại sau ít phút."
+      );
+    }
     throw new GeminiError(
       "MODEL_NOT_FOUND",
       `Không có model Gemini nào khả dụng với API Key này (đã thử: ${MODEL_CANDIDATES.join(", ")}). Model có thể đã bị Google ngừng hỗ trợ hoàn toàn cho key này, hoặc key chưa được cấp quyền dùng Gemini. Vui lòng kiểm tra lại API Key trong Google AI Studio, hoặc báo cho người phát triển để cập nhật danh sách model.`

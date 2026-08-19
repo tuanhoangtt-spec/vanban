@@ -753,3 +753,70 @@ Google đã ngừng phục vụ tên đó cho API Key này trước thời hạn
   trước khi model đúng phản hồi), nhưng không đáng kể so với thời gian
   Gemini xử lý ảnh/PDF, và chỉ xảy ra cho tới khi Google hoàn toàn ổn định
   lại tên model.
+
+### Mục 25 — Sau khi sửa mục 24: đổi sang lỗi khác — "Máy chủ Gemini đang gặp sự cố tạm thời (lỗi 5xx)"
+
+Người dùng thử lại sau khi có bản vá mục 24 và gặp lỗi mới: không còn 404
+nữa, nhưng giờ báo 5xx.
+
+**Xác nhận nguyên nhân bằng web search:** lỗi `503 UNAVAILABLE — "The model
+is overloaded. Please try again later."` là lỗi RẤT PHỔ BIẾN với Gemini
+API, được xác nhận bởi chính trang troubleshooting chính thức của Google
+(ai.google.dev/gemini-api/docs/troubleshooting) lẫn nhiều báo cáo độc lập
+khác (forum Google, GitHub issues của các công cụ dùng Gemini). Đây KHÔNG
+phải lỗi logic trong app — là tình trạng quá tải tạm thời phía server
+Gemini, xảy ra ngẫu nhiên bất kể model nào, bất kể gói trả phí hay miễn
+phí. Google khuyến nghị chính thức: xử lý bằng exponential backoff (tự thử
+lại sau khoảng thời gian tăng dần), và nói rõ SDK Python của họ tự làm việc
+này, nhưng **SDK JS/TS `@google/genai` mà app đang dùng KHÔNG tự retry** —
+đây là lỗ hổng thật sự cần vá, không phải may rủi từ phía Google.
+
+**Đã sửa:** thêm cơ chế tự động thử lại khi gặp lỗi 5xx, TRƯỚC KHI báo lỗi
+cho người dùng thấy:
+1. Tách phần gọi API thật sự (`generateOnce`) ra khỏi vòng lặp thử model
+   (để dễ bọc thêm retry mà không lặp code).
+2. Thêm `generateWithRetry`: với MỖI model, nếu gặp lỗi 5xx (`NETWORK`),
+   tự động thử lại tối đa 3 lần với độ trễ tăng dần có random jitter
+   (~1s → ~2.5s → ~5s, mỗi lần ±20% ngẫu nhiên để tránh nhiều tab/nhiều
+   người dùng cùng retry đúng 1 thời điểm — đúng khuyến nghị chống hiệu ứng
+   "thundering herd" từ tài liệu Google). Các lỗi KHÁC (sai key, hết token,
+   bị chặn nội dung...) KHÔNG được retry ở đây vì không phải lỗi tạm thời,
+   retry chỉ tổ làm người dùng chờ vô ích.
+3. Nếu 1 model vẫn 5xx sau khi hết lượt retry, `callGemini()` giờ coi đây
+   cũng là lý do hợp lệ để CHUYỂN SANG MODEL DỰ PHÒNG KẾ TIẾP (mở rộng logic
+   fallback ở mục 24 — trước đó chỉ chuyển model khi gặp 404, giờ thêm cả
+   5xx dai dẳng), vì backend của từng model có thể quá tải độc lập với
+   nhau — thử `gemini-2.5-flash` khi `gemini-flash-latest` đang quá tải là
+   hợp lý và ít tốn kém hơn nhiều so với báo lỗi ngay cho người dùng.
+4. Chỉ khi CẢ 3 model đều 5xx sau khi đã retry hết mỗi model, app mới báo
+   lỗi cho người dùng — với thông báo rõ ràng là đã tự thử lại nhiều lần
+   trên nhiều model, không phải lỗi ngay lần đầu như trước.
+
+**Đã xác nhận:** `npx tsc --noEmit` sạch (0 lỗi, cài `node_modules` thật)
+và `npm run build` sạch (đã tạm thay `next/font/google` để cô lập lỗi mạng
+Google Fonts của sandbox, khôi phục `layout.tsx` nguyên trạng ngay sau).
+
+**Giới hạn còn lại:**
+- **CHƯA test qua Gemini thật** — không thể mô phỏng lỗi 503 thật trong
+  sandbox (không có mạng ra Gemini API để tự tạo tình huống quá tải). Cơ
+  chế retry đã đúng theo khuyến nghị chính thức của Google về mặt thuật
+  toán (đã đối chiếu công thức backoff+jitter với tài liệu troubleshooting
+  của Google), nhưng hiệu quả thực tế (503 có giảm tần suất người dùng thấy
+  hay không) cần người dùng tự xác nhận qua vài lần quét thật.
+- Tổng thời gian chờ tối đa nếu CẢ 3 model đều quá tải liên tục: khoảng
+  (1+2.5+5) giây × 3 model ≈ 25 giây retry, CỘNG với thời gian Gemini xử lý
+  thật của mỗi lần gọi (thường vài giây tới vài chục giây với ảnh/PDF phức
+  tạp) — có thể khiến người dùng chờ khá lâu trước khi thấy lỗi trong
+  trường hợp xấu nhất (quá tải diện rộng thật sự). Đây là đánh đổi có chủ
+  đích (ưu tiên tự phục hồi hơn là báo lỗi nhanh) nhưng nên cân nhắc thêm
+  UI hiển thị "đang thử lại lần X/Y" nếu người dùng phản ánh thấy màn hình
+  đứng im quá lâu mà không rõ đang làm gì — hiện tại UI chỉ hiển thị trạng
+  thái "đang quét" chung chung trong suốt toàn bộ quá trình, không phân
+  biệt được đang gọi lần đầu hay đang retry.
+- Ngưỡng 3 lần retry / độ trễ 1-2.5-5s là giá trị hợp lý theo khuyến nghị
+  chung (không phải số đo được từ chính API key/traffic pattern của người
+  dùng) — có thể cần chỉnh nếu thực tế cho thấy 503 của Gemini thường mất
+  lâu hơn khoảng này để tự hết (một số nguồn nói tới 30-60 phút trong đợt
+  quá tải diện rộng, lúc đó retry ngắn hạn không giúp được gì và người dùng
+  chỉ nên đợi rồi thử lại sau — thông báo lỗi hiện tại đã nói "thử lại sau
+  ít phút" để phản ánh đúng kỳ vọng này).
