@@ -3,18 +3,23 @@
 Ứng dụng web quét ảnh **hoặc file PDF** văn bản tiếng Việt (chữ in, chữ viết tay,
 biểu mẫu, bảng biểu, kể cả PDF nhiều trang) và tự động xuất ra file **Word (`.docx`)**
 hoặc **PDF (`.pdf`)** chuẩn format văn phòng, dùng Google Gemini (`@google/genai`,
-model `gemini-2.5-flash`, hỗ trợ đọc PDF gốc — không cần chuyển PDF thành ảnh trước)
+Gemini Flash (hỗ trợ đọc PDF gốc — không cần chuyển PDF thành ảnh trước)
 để đọc nội dung, thư viện `docx` để dựng file Word và `jsPDF` + `jspdf-autotable`
 để dựng file PDF — cả hai đều chạy ngay trên trình duyệt, cùng đọc từ một dữ liệu
 JSON nên nội dung giữa hai định dạng luôn khớp nhau. Hỗ trợ lưu **nhiều API Key**
 và tự động xoay vòng sang key kế tiếp khi một key hết hạn mức (quota) trong ngày.
 
 > **Lưu ý về model:** `gemini-1.5-flash` đã bị Google ngừng hỗ trợ hoàn toàn trong
-> năm 2026 (mọi request trả về lỗi 404). App này dùng `gemini-2.5-flash` qua SDK
-> `@google/genai` (SDK cũ `@google/generative-ai` đã bị Google khai tử). Model ID
-> được khai báo tại một chỗ duy nhất trong `utils/geminiClient.ts` (hằng số `MODEL`)
-> để dễ cập nhật khi Google đổi model trong tương lai — xem
-> https://ai.google.dev/gemini-api/docs/models để kiểm tra model mới nhất.
+> năm 2026 (mọi request trả về lỗi 404), và `gemini-2.5-flash` cũng đã bắt đầu trả
+> về 404 cho một số API Key kể từ tháng 7/2026 — SỚM HƠN ngày ngừng hỗ trợ chính
+> thức Google công bố (16/10/2026). Google không rollout việc khai tử model đồng
+> đều cho mọi tài khoản/khu vực, nên app không còn hardcode 1 tên model duy nhất
+> nữa (xem Mục 22 trong phần "Nhật ký sửa lỗi" bên dưới). App dùng SDK
+> `@google/genai` (SDK cũ `@google/generative-ai` đã bị Google khai tử). Danh sách
+> model dự phòng được khai báo tại một chỗ duy nhất trong `utils/geminiClient.ts`
+> (hằng số `MODEL_CANDIDATES`) — thử lần lượt, tự chuyển sang model kế tiếp nếu
+> model hiện tại 404. Xem https://ai.google.dev/gemini-api/docs/models để kiểm
+> tra model mới nhất nếu cần cập nhật danh sách này trong tương lai.
 
 ## 1. Kiến trúc & cách hoạt động
 
@@ -688,3 +693,63 @@ nhận được phản hồi/file mới tại thời điểm này nên chưa th�
 Mục 23 ở trên (siết rule 14) là bước chủ động làm trước dựa trên bằng chứng
 đã có sẵn từ phiên trước, nhưng có thể không phải đúng nguyên nhân của vấn
 đề người dùng đang thấy ở 2 file mới này — cần xác nhận lại khi có dữ liệu.
+
+---
+
+## Phiên tiếp theo: quét bị lỗi 404 model ngay từ bước đầu (chưa test qua Gemini/browser thật)
+
+Người dùng gửi ảnh chụp lỗi hiện ra trên UI ngay khi bấm quét:
+
+```
+Model "gemini-2.5-flash" không khả dụng với API Key này (404). Model có thể
+đã bị Google ngừng hỗ trợ — vui lòng báo cho người phát triển để cập nhật
+tên model.
+```
+
+### Mục 24 — `gemini-2.5-flash` trả 404 sớm hơn ngày Google công bố ngừng hỗ trợ
+
+**Xác nhận nguyên nhân bằng web search** (không đoán mò): Google công bố
+ngày ngừng hỗ trợ chính thức cho `gemini-2.5-flash` là "không sớm hơn
+16/10/2026", nhưng nhiều lập trình viên đã báo trên chính forum của Google
+(discuss.ai.google.dev, từ đầu tháng 7/2026) rằng model này bắt đầu trả về
+404 "no longer available" cho một số API Key/khu vực SỚM HƠN NHIỀU so với
+ngày công bố — Google không rollout việc khai tử đồng đều cho mọi tài
+khoản. Đây đúng là tình huống người dùng gặp phải: app không có lỗi logic
+gì, chỉ đơn giản là hardcode 1 tên model duy nhất (`gemini-2.5-flash`) và
+Google đã ngừng phục vụ tên đó cho API Key này trước thời hạn.
+
+**Đã sửa (2 lớp):**
+1. Đổi từ hardcode 1 model sang danh sách dự phòng `MODEL_CANDIDATES` trong
+   `utils/geminiClient.ts`: `["gemini-flash-latest", "gemini-2.5-flash",
+   "gemini-3.5-flash"]`. `gemini-flash-latest` là alias CHÍNH THỨC do
+   Google công bố dành riêng cho vấn đề này — luôn tự trỏ tới model Flash
+   GA mới nhất phía server, nên sẽ tiếp tục hoạt động qua các lần Google
+   đổi tên model trong tương lai mà không cần sửa code. Hai model còn lại
+   là lưới an toàn tường minh (bản thân alias cũng từng có tiền lệ bị lỗi
+   khi Google chuyển giao giữa hai thế hệ model).
+2. `callGemini()` giờ thử lần lượt từng model trong danh sách: nếu 1 model
+   trả về lỗi 404 (thêm mã lỗi mới `MODEL_NOT_FOUND` để phân biệt với các
+   lỗi 4xx khác như sai key/chưa bật billing), tự động chuyển sang model
+   kế tiếp trong CÙNG một lượt quét — người dùng không thấy lỗi nếu còn ít
+   nhất 1 model trong danh sách còn hoạt động. Các lỗi KHÁC (quota, sai
+   key, bị chặn nội dung, mạng...) vẫn báo ngay lập tức như cũ, không bị
+   danh sách dự phòng này che giấu hay làm chậm.
+
+**Giới hạn còn lại:**
+- **CHƯA test qua Gemini thật** — sandbox không gọi được Gemini API. Chỉ
+  mới xác nhận bằng `npx tsc --noEmit` (0 lỗi, sau khi `npm install` thật
+  để có type declarations) và `npm run build` (build sạch, đã tạm thay
+  `next/font/google` bằng object rỗng để cô lập lỗi mạng Google Fonts của
+  sandbox — không liên quan đến bug, đã khôi phục `layout.tsx` nguyên trạng
+  ngay sau khi xác nhận build sạch). Người dùng cần tự quét thử lại 1 ảnh
+  bất kỳ để xác nhận app không còn báo lỗi 404 nữa.
+- Nếu cả 3 model trong danh sách đều 404 (rất khó xảy ra cùng lúc, nhưng
+  không phải bằng 0), app báo lỗi rõ ràng liệt kê tên cả 3 model đã thử,
+  thay vì lỗi mơ hồ như trước — nhưng lúc đó vẫn cần người dùng/người phát
+  triển tự cập nhật danh sách `MODEL_CANDIDATES` bằng tay theo model mới
+  nhất tại https://ai.google.dev/gemini-api/docs/models.
+- Việc thử nhiều model tuần tự khi 1 model 404 làm tăng nhẹ độ trễ lần quét
+  đầu tiên sau mỗi đợt Google đổi model (thêm ~1 round-trip request lỗi
+  trước khi model đúng phản hồi), nhưng không đáng kể so với thời gian
+  Gemini xử lý ảnh/PDF, và chỉ xảy ra cho tới khi Google hoàn toàn ổn định
+  lại tên model.
